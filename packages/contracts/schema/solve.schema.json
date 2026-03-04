@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opentos.dev/schema/solve.schema.json",
+  "title": "SolveRequest",
+  "type": "object",
+  "required": [
+    "model",
+    "units",
+    "preservedRegions",
+    "forces",
+    "material",
+    "targetSafetyFactor",
+    "outcomeCount"
+  ],
+  "properties": {
+    "model": {
+      "type": "object",
+      "required": ["format", "dataBase64"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["stl", "obj", "glb"]
+        },
+        "dataBase64": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "units": {
+      "type": "string",
+      "enum": ["mm", "in", "m"]
+    },
+    "preservedRegions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "faceIndices"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "faceIndices": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "forces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["point", "direction", "magnitude", "unit"],
+        "properties": {
+          "point": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "direction": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "magnitude": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["N", "lb"]
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "material": {
+      "type": "string",
+      "enum": ["Aluminum 6061"]
+    },
+    "targetSafetyFactor": {
+      "type": "number",
+      "minimum": 1
+    },
+    "outcomeCount": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 12
+    },
+    "manufacturingConstraint": {
+      "type": "string",
+      "enum": ["3-axis milling", "Additive"]
+    }
+  },
+  "additionalProperties": false
+}

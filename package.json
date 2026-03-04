@@ -1,0 +1,15 @@
+{
+  "name": "opentos-generative-design",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @opentos/web run dev",
+    "build:web": "npm --workspace @opentos/web run build",
+    "test:web": "npm --workspace @opentos/web run test",
+    "sample:generate": "python3 scripts/generate_sample_part.py"
+  }
+}
