@@ -129,7 +129,7 @@ function EditablePart({
     }
 
     const faceIndex = event.faceIndex;
-    if (faceIndex === undefined || faceIndex < 0 || faceIndex >= faceCenters.length) {
+    if (faceIndex == null || faceIndex < 0 || faceIndex >= faceCenters.length) {
       return;
     }
 
