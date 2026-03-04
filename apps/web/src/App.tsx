@@ -9,7 +9,8 @@ import { applyFaceLabels, buildSolvePayload, getPreservedFaceIndices, initialize
 import type { ForceState, JobStatus, RegionLabel, StudySettings, UploadedModel } from "./types";
 import "./styles.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
+const apiUrl = (path: string) => (API_BASE ? `${API_BASE}${path}` : path);
 
 const STAGES: JobStatus["stage"][] = [
   "queued",
@@ -58,6 +59,7 @@ export default function App() {
   const [showOriginal, setShowOriginal] = useState(true);
   const [showOutcomeOverlay, setShowOutcomeOverlay] = useState(true);
   const [wireframe, setWireframe] = useState(false);
+  const [isSubmittingStudy, setIsSubmittingStudy] = useState(false);
 
   const selectedForce = useMemo(
     () => forces.find((force) => force.id === selectedForceId) ?? null,
@@ -73,7 +75,7 @@ export default function App() {
 
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+        const response = await fetch(apiUrl(`/api/jobs/${jobId}`));
         if (!response.ok) {
           throw new Error(`Status request failed (${response.status})`);
         }
@@ -203,6 +205,10 @@ export default function App() {
   };
 
   const runStudy = async () => {
+    if (isSubmittingStudy || jobId) {
+      return;
+    }
+
     if (!model) {
       setError("Upload a model before running a study.");
       return;
@@ -222,38 +228,51 @@ export default function App() {
     setOutcomes([]);
     setSelectedOutcomeId(null);
     setSelectedOutcomeObject(null);
+    setIsSubmittingStudy(true);
 
-    const payload = buildSolvePayload({
-      model,
-      units: settings.units,
-      faceLabels,
-      forces,
-      material: settings.material,
-      targetSafetyFactor: settings.targetSafetyFactor,
-      outcomeCount: settings.outcomeCount,
-      manufacturingConstraint: settings.manufacturingConstraint
-    });
+    try {
+      const payload = buildSolvePayload({
+        model,
+        units: settings.units,
+        faceLabels,
+        forces,
+        material: settings.material,
+        targetSafetyFactor: settings.targetSafetyFactor,
+        outcomeCount: settings.outcomeCount,
+        manufacturingConstraint: settings.manufacturingConstraint
+      });
 
-    const response = await fetch(`${API_BASE}/api/solve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+      const response = await fetch(apiUrl("/api/solve"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
 
-    if (!response.ok) {
-      const text = await response.text();
-      setError(`Solve request failed (${response.status}): ${text}`);
-      return;
+      if (!response.ok) {
+        const text = await response.text();
+        setError(`Solve request failed (${response.status}): ${text}`);
+        return;
+      }
+
+      const accepted = (await response.json()) as { jobId: string };
+      setJobId(accepted.jobId);
+      setJobStatus({
+        jobId: accepted.jobId,
+        status: "queued",
+        stage: "queued",
+        progress: 0
+      });
+    } catch (err) {
+      const apiTarget = API_BASE || "same origin (/api)";
+      const message = err instanceof Error ? err.message : "Unknown network error";
+      if (message.toLowerCase().includes("failed to fetch")) {
+        setError(`Cannot reach API at ${apiTarget}. Set VITE_API_BASE to your backend URL.`);
+      } else {
+        setError(`Failed to start study: ${message}`);
+      }
+    } finally {
+      setIsSubmittingStudy(false);
     }
-
-    const accepted = (await response.json()) as { jobId: string };
-    setJobId(accepted.jobId);
-    setJobStatus({
-      jobId: accepted.jobId,
-      status: "queued",
-      stage: "queued",
-      progress: 0
-    });
   };
 
   return (
@@ -490,9 +509,18 @@ export default function App() {
               onChange={(event) => setSettings((curr) => ({ ...curr, outcomeCount: Number(event.target.value) }))}
             />
           </label>
-          <button type="button" className="run-button" onClick={() => void runStudy()}>
-            Run Generative Study
+          <button
+            type="button"
+            className="run-button"
+            disabled={isSubmittingStudy || Boolean(jobId)}
+            onClick={() => void runStudy()}
+          >
+            {isSubmittingStudy || jobId ? "Starting Study..." : "Run Generative Study"}
           </button>
+          <p className="small-note run-hint">
+            Required: model upload, at least 1 preserved face, and at least 1 force.
+          </p>
+          {error && <p className="panel-error">{error}</p>}
         </section>
       </aside>
 
