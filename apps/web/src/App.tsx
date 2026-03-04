@@ -250,7 +250,14 @@ export default function App() {
 
       if (!response.ok) {
         const text = await response.text();
-        setError(`Solve request failed (${response.status}): ${text}`);
+        if ((response.status === 404 || response.status === 405) && !text.trim()) {
+          const apiTarget = API_BASE || `${window.location.origin} (same-origin /api)`;
+          setError(
+            `API endpoint rejected POST (${response.status}). This deployment is likely serving static assets only. Configure VITE_API_BASE to your backend URL. Current target: ${apiTarget}`
+          );
+        } else {
+          setError(`Solve request failed (${response.status}): ${text}`);
+        }
         return;
       }
 
