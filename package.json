@@ -7,9 +7,11 @@
     "packages/contracts"
   ],
   "scripts": {
+    "build": "npm run build:web",
     "dev:web": "npm --workspace @opentos/web run dev",
     "build:web": "npm --workspace @opentos/web run build",
     "test:web": "npm --workspace @opentos/web run test",
+    "deploy:cf": "npx wrangler deploy",
     "sample:generate": "python3 scripts/generate_sample_part.py"
   }
 }
