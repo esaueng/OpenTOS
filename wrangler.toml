@@ -1,0 +1,9 @@
+name = "opentos-web"
+compatibility_date = "2026-03-04"
+
+[assets]
+directory = "./apps/web/dist"
+not_found_handling = "single-page-application"
+
+[build]
+command = "npm run build:web"

@@ -122,3 +122,18 @@ npm test
 
 - Preserved faces are selected from the uploaded mesh and passed as `faceIndices`.
 - The solver locks preserved regions in voxel synthesis and exports preserved mesh triangles unmodified as a dedicated GLB node.
+
+## Cloudflare Deploy (Web UI)
+
+This repo is a monorepo, so Wrangler must use the checked-in root config instead of workspace autodetection.
+
+- Config file: `wrangler.toml`
+- Deploy command: `npx wrangler deploy` (or `npm run deploy:cf`)
+
+If Cloudflare is configured with a custom deploy command, keep it as:
+
+```bash
+npx wrangler deploy
+```
+
+The config runs `npm run build:web` before deploy and publishes `apps/web/dist` as SPA assets.
