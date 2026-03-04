@@ -1,0 +1,7 @@
+{
+  "name": "connecting_rod_sample",
+  "vertexCount": 524,
+  "faceCount": 1044,
+  "units": "arbitrary-model-units",
+  "description": "Parametric connecting-rod style mesh used as a study starter for OpenTOS"
+}

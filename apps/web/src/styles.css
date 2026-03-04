@@ -1,0 +1,333 @@
+:root {
+  --bg-top: #0a1020;
+  --bg-bottom: #121c31;
+  --panel: rgba(9, 16, 30, 0.82);
+  --panel-soft: rgba(17, 28, 49, 0.68);
+  --stroke: rgba(130, 151, 199, 0.28);
+  --text: #edf4ff;
+  --muted: #a7b5ce;
+  --accent: #4ec9b4;
+  --accent-strong: #60e8cf;
+  --warn: #ffd166;
+  --error: #ff6b6b;
+  font-family: "Avenir Next", "Space Grotesk", "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 8% 12%, rgba(96, 232, 207, 0.16), transparent 28%),
+    radial-gradient(circle at 82% 88%, rgba(74, 116, 221, 0.2), transparent 36%),
+    linear-gradient(148deg, var(--bg-top), var(--bg-bottom));
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.control-panel {
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(9, 16, 28, 0.93), rgba(14, 24, 44, 0.82));
+  border-right: 1px solid var(--stroke);
+  overflow-y: auto;
+  backdrop-filter: blur(8px);
+}
+
+.control-panel h1 {
+  margin: 0;
+  font-size: 1.24rem;
+  letter-spacing: 0.02em;
+}
+
+.control-panel p {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel-card {
+  margin-top: 1rem;
+  padding: 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--stroke);
+  background: var(--panel-soft);
+}
+
+.panel-card h2 {
+  margin-top: 0;
+  margin-bottom: 0.7rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #d8e6ff;
+}
+
+label {
+  display: block;
+  margin-top: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+input,
+select,
+button,
+progress {
+  width: 100%;
+}
+
+input,
+select,
+button {
+  margin-top: 0.24rem;
+  background: rgba(8, 18, 34, 0.82);
+  color: var(--text);
+  border: 1px solid rgba(132, 155, 210, 0.3);
+  border-radius: 9px;
+  padding: 0.44rem 0.58rem;
+}
+
+button {
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(138, 178, 255, 0.68);
+}
+
+button.is-active {
+  border-color: var(--accent-strong);
+  background: rgba(19, 50, 70, 0.92);
+}
+
+.inline-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.45rem;
+}
+
+.force-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.force-chip {
+  width: auto;
+  font-size: 0.78rem;
+  padding-inline: 0.55rem;
+}
+
+.force-editor {
+  margin-top: 0.65rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed rgba(149, 171, 219, 0.35);
+}
+
+.run-button {
+  margin-top: 0.72rem;
+  background: linear-gradient(125deg, #1b7f73, #2ea7ae);
+  border: 1px solid rgba(140, 235, 225, 0.52);
+  color: #f2fffb;
+  font-weight: 600;
+}
+
+.small-note {
+  margin-top: 0.42rem;
+  font-size: 0.76rem;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: 1fr 300px;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.viewer-panel,
+.outcomes-panel {
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+  position: relative;
+}
+
+.viewer-toolbar {
+  padding: 0.62rem;
+  border-bottom: 1px solid var(--stroke);
+  display: grid;
+  gap: 0.56rem;
+}
+
+.progress-wrap {
+  background: rgba(9, 18, 34, 0.72);
+  border: 1px solid rgba(120, 145, 195, 0.28);
+  border-radius: 10px;
+  padding: 0.5rem;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  margin-bottom: 0.34rem;
+}
+
+progress {
+  height: 0.42rem;
+}
+
+.stage-track {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.2rem;
+  margin-top: 0.4rem;
+}
+
+.stage-track span {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7d8ba8;
+}
+
+.stage-track span.is-hit {
+  color: #c6f6e8;
+}
+
+.viewer-shell {
+  width: 100%;
+  height: calc(100% - 124px);
+  min-height: 320px;
+}
+
+.force-label {
+  color: #ffe3a5;
+  font-size: 0.66rem;
+  background: rgba(10, 16, 27, 0.86);
+  border: 1px solid rgba(255, 209, 102, 0.5);
+  border-radius: 999px;
+  padding: 0.1rem 0.34rem;
+  white-space: nowrap;
+}
+
+.outcomes-panel {
+  padding: 0.62rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.outcomes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.45rem;
+}
+
+.outcomes-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.outcomes-header p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.55rem;
+  overflow-y: auto;
+}
+
+.outcome-tile {
+  text-align: left;
+  padding: 0.52rem;
+  border: 1px solid rgba(114, 140, 187, 0.34);
+  border-radius: 12px;
+  background: rgba(10, 20, 36, 0.8);
+}
+
+.outcome-tile.is-selected {
+  border-color: rgba(112, 245, 219, 0.78);
+  box-shadow: 0 0 0 1px rgba(112, 245, 219, 0.35) inset;
+}
+
+.tile-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.74rem;
+}
+
+.thumbnail-canvas {
+  height: 122px;
+  margin-top: 0.42rem;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(130, 154, 199, 0.28);
+  background: linear-gradient(145deg, #0d1f38, #102341);
+}
+
+.tile-metrics {
+  margin-top: 0.44rem;
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.68rem;
+  color: #b4c4de;
+}
+
+.empty-state {
+  margin-top: 1.2rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.error-banner {
+  position: absolute;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(255, 120, 120, 0.6);
+  border-radius: 10px;
+  background: rgba(63, 18, 25, 0.92);
+  color: #ffd6d6;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 1120px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .control-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--stroke);
+    max-height: 48vh;
+  }
+
+  .workspace {
+    grid-template-rows: 1fr 42vh;
+    min-height: 52vh;
+  }
+}

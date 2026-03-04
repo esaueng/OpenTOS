@@ -1,0 +1,23 @@
+# Node
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Build artifacts
+dist/
+coverage/
+
+# Runtime data
+data/studies/**
+!data/studies/.gitkeep
+
+# Logs
+*.log
+
+# OS
+.DS_Store
