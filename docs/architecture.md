@@ -6,6 +6,12 @@
 - `@react-three/fiber` viewer with face brush painting for preserved/design labeling.
 - Force placement by clicking mesh surfaces and editing direction/magnitude in-panel.
 - Outcome grid supports side-by-side comparison with thumbnail previews and metric cards.
+- Browser worker solver stack in `apps/web/src/workers/solver`:
+  - `voxel.ts`: domain voxelization + flood fill + seed distances
+  - `fields.ts`: directional/connectivity/boundary influence fields
+  - `optimize.ts`: density evolution and thickness enforcement
+  - `mesh.ts`: marching-tetra extraction + Taubin smoothing
+  - `variants.ts`: multi-outcome parameter sweep + uniqueness gates
 
 ## API (`apps/api`)
 

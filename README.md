@@ -67,9 +67,16 @@ In browser mode, `Run Generative Study` does not call `/api/solve`; it computes 
 
 The browser solver synthesis is tuned for Autodesk/Discovery-style visuals:
 
-- Smooth branched rib networks between load points and preserved interfaces
-- Organic transitions at junctions
-- Open truss-like cutouts instead of dense faceted blocks
+- Volumetric voxel-domain synthesis with directional load-path influence fields
+- Density evolution with smoothing/projection to avoid jagged voxel artifacts
+- Marching-tetrahedra reconstruction + Taubin smoothing for flowing ribs/cutouts
+- Strict preserved-interface locking with preserved triangles exported unchanged
+
+Quality profiles are available for browser solve mode:
+
+- `High Fidelity` (default): highest organic fidelity, longer runtime.
+- `Balanced`: reduced voxel count and iteration budget.
+- `Fast Preview`: fastest turnaround with lower geometric richness.
 
 ## 3) Use the sample part
 

@@ -14,6 +14,37 @@ interface OutcomeTilesProps {
 
 function Thumbnail({ base64 }: { base64: string }) {
   const [object, setObject] = useState<THREE.Object3D | null>(null);
+  const previewObject = useMemo(() => {
+    if (!object) {
+      return null;
+    }
+    const clone = object.clone(true);
+    clone.traverse((node) => {
+      if (!(node instanceof THREE.Mesh) || !node.material) {
+        return;
+      }
+      const source = Array.isArray(node.material) ? node.material[0] : node.material;
+      const material = source.clone();
+      material.wireframe = false;
+      material.transparent = true;
+      if (node.name === "preserved") {
+        material.color = new THREE.Color("#35d07f");
+        material.opacity = 0.18;
+        material.metalness = 0.08;
+        material.roughness = 0.72;
+      } else {
+        material.color = new THREE.Color("#2e3a46");
+        material.opacity = 1;
+        material.metalness = 0.9;
+        material.roughness = 0.18;
+        material.emissive = new THREE.Color("#10161f");
+        material.emissiveIntensity = 0.23;
+      }
+      material.needsUpdate = true;
+      node.material = material;
+    });
+    return clone;
+  }, [object]);
 
   useEffect(() => {
     let active = true;
@@ -39,7 +70,7 @@ function Thumbnail({ base64 }: { base64: string }) {
       <Canvas camera={{ position: [1.2, 1.1, 1.2], fov: 35 }}>
         <ambientLight intensity={0.75} />
         <directionalLight position={[2, 3, 2]} intensity={1.0} />
-        {object && <primitive object={object.clone(true)} />}
+        {previewObject && <primitive object={previewObject} />}
         <OrbitControls enablePan={false} enableZoom={false} autoRotate autoRotateSpeed={0.75} />
       </Canvas>
     </div>
