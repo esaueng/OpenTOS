@@ -47,6 +47,23 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
+### Browser-Only Solver Mode (No Backend Required)
+
+The web app now supports local in-browser solving through a Web Worker.
+
+- Default mode: `browser`
+- Optional API mode: set `VITE_SOLVER_MODE=api`
+
+To force browser mode explicitly:
+
+```bash
+cd apps/web
+echo 'VITE_SOLVER_MODE=browser' > .env.local
+npm run dev
+```
+
+In browser mode, `Run Generative Study` does not call `/api/solve`; it computes outcomes locally and streams progress in the UI.
+
 ## 3) Use the sample part
 
 - Click `Load Sample Connecting Rod` in the UI, or upload files from:
@@ -129,6 +146,10 @@ This repo is a monorepo, so Wrangler must use the checked-in root config instead
 
 - Config file: `wrangler.toml`
 - Deploy command: `npx wrangler deploy` (or `npm run deploy:cf`)
+
+For browser-only deployment on Cloudflare, set:
+
+- `VITE_SOLVER_MODE=browser`
 
 If Cloudflare is configured with a custom deploy command, keep it as:
 
