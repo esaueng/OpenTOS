@@ -64,6 +64,12 @@ npm run dev
 
 In browser mode, `Run Generative Study` does not call `/api/solve`; it computes outcomes locally and streams progress in the UI.
 
+The browser solver synthesis is tuned for Autodesk/Discovery-style visuals:
+
+- Smooth branched rib networks between load points and preserved interfaces
+- Organic transitions at junctions
+- Open truss-like cutouts instead of dense faceted blocks
+
 ## 3) Use the sample part
 
 - Click `Load Sample Connecting Rod` in the UI, or upload files from:
