@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, type ThreeEvent } from "@react-three/fiber";
-import { Bounds, Environment, Grid, Html, OrbitControls } from "@react-three/drei";
+import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
+import { Environment, Grid, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
   acceleratedRaycast,
   computeBoundsTree,
@@ -52,9 +53,63 @@ type SurfaceGrowData = {
   adjacency: number[][];
 };
 
+interface CameraAutoFitProps {
+  fitRootRef: React.RefObject<THREE.Group>;
+  controlsRef: React.RefObject<OrbitControlsImpl | null>;
+  fitKey: string;
+}
+
 function quantizedVertexKey(x: number, y: number, z: number): string {
   const q = 1e5;
   return `${Math.round(x * q)}:${Math.round(y * q)}:${Math.round(z * q)}`;
+}
+
+function CameraAutoFit({ fitRootRef, controlsRef, fitKey }: CameraAutoFitProps) {
+  const { camera, invalidate } = useThree();
+
+  useEffect(() => {
+    const root = fitRootRef.current;
+    if (!root) {
+      return;
+    }
+
+    root.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(root);
+    if (box.isEmpty()) {
+      return;
+    }
+
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() * 0.5, 1e-4);
+
+    camera.near = Math.max(radius / 5000, 1e-6);
+    camera.far = Math.max(radius * 5000, 1000);
+    camera.updateProjectionMatrix();
+
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.target.copy(center);
+      controls.minDistance = Math.max(radius * 0.01, 1e-5);
+      controls.maxDistance = Math.max(radius * 10000, controls.minDistance * 1000);
+
+      const dir = camera.position.clone().sub(controls.target);
+      if (dir.lengthSq() <= 1e-12) {
+        dir.set(1, 0.6, 1);
+      }
+      dir.normalize();
+      const targetDistance = Math.max(radius * 2.8, controls.minDistance * 2);
+      camera.position.copy(center).addScaledVector(dir, targetDistance);
+      controls.update();
+    } else {
+      camera.position.set(center.x + radius * 2.2, center.y + radius * 1.4, center.z + radius * 2.2);
+      camera.lookAt(center);
+    }
+
+    invalidate();
+  }, [camera, controlsRef, fitKey, fitRootRef, invalidate]);
+
+  return null;
 }
 
 function EditablePart({
@@ -307,8 +362,7 @@ function EditablePart({
         metalness={0.25}
         roughness={0.45}
         vertexColors
-        transparent
-        opacity={0.78}
+        side={THREE.DoubleSide}
       />
     </mesh>
   );
@@ -367,19 +421,20 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
 
         if (node.name === "preserved") {
           material.color = new THREE.Color("#35d07f");
-          material.transparent = true;
-          material.opacity = 0.28;
+          material.transparent = false;
+          material.opacity = 1;
           material.metalness = 0.16;
           material.roughness = 0.62;
         } else {
           material.color = new THREE.Color("#2f353d");
-          material.transparent = true;
-          material.opacity = 0.95;
+          material.transparent = false;
+          material.opacity = 1;
           material.metalness = 0.86;
           material.roughness = 0.2;
           material.emissive = new THREE.Color("#0f141b");
           material.emissiveIntensity = 0.2;
         }
+        material.side = THREE.DoubleSide;
 
         material.needsUpdate = true;
         node.material = material;
@@ -406,41 +461,52 @@ export function ViewerCanvas({
   showOutcomeOverlay,
   wireframe
 }: ViewerCanvasProps) {
+  const fitRootRef = useRef<THREE.Group>(null);
+  const controlsRef = useRef<OrbitControlsImpl | null>(null);
+  const fitKey = `${geometry?.uuid ?? "no-geometry"}:${showOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${showOutcomeOverlay}`;
+
   return (
     <div className="viewer-shell">
-      <Canvas camera={{ fov: 42, position: [1.2, 1.2, 1.2] }} shadows>
+      <Canvas camera={{ fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }} shadows onPointerMissed={() => onSelectForce(null)}>
         <color attach="background" args={["#081223"]} />
         <ambientLight intensity={0.5} />
         <directionalLight position={[2, 3, 2]} intensity={1.1} castShadow />
-        <Bounds fit clip observe margin={1.25}>
-          <group onClick={() => onSelectForce(null)}>
-            {geometry && showOriginal && (
-              <EditablePart
-                geometry={geometry}
-                faceLabels={faceLabels}
-                paintLabel={paintLabel}
-                brushRadius={brushRadius}
-                onPaintFaces={onPaintFaces}
-                placeForceMode={placeForceMode}
-                onPlaceForce={onPlaceForce}
-              />
-            )}
-            {outcomeObject && showOutcomeOverlay && (
-              <OutcomeOverlay object={outcomeObject} wireframe={wireframe} />
-            )}
-            {forces.map((force) => (
-              <ForceArrow
-                key={force.id}
-                force={force}
-                selected={force.id === selectedForceId}
-                onSelect={() => onSelectForce(force.id)}
-              />
-            ))}
-          </group>
-        </Bounds>
+        <group ref={fitRootRef} onClick={() => onSelectForce(null)}>
+          {geometry && showOriginal && (
+            <EditablePart
+              geometry={geometry}
+              faceLabels={faceLabels}
+              paintLabel={paintLabel}
+              brushRadius={brushRadius}
+              onPaintFaces={onPaintFaces}
+              placeForceMode={placeForceMode}
+              onPlaceForce={onPlaceForce}
+            />
+          )}
+          {outcomeObject && showOutcomeOverlay && (
+            <OutcomeOverlay object={outcomeObject} wireframe={wireframe} />
+          )}
+        </group>
+        {forces.map((force) => (
+          <ForceArrow
+            key={force.id}
+            force={force}
+            selected={force.id === selectedForceId}
+            onSelect={() => onSelectForce(force.id)}
+          />
+        ))}
+        <CameraAutoFit fitRootRef={fitRootRef} controlsRef={controlsRef} fitKey={fitKey} />
         <Grid args={[4, 4]} infiniteGrid cellColor="#2f3b50" sectionColor="#4f6285" fadeDistance={14} />
         <Environment preset="city" />
-        <OrbitControls makeDefault enableDamping />
+        <OrbitControls
+          ref={controlsRef}
+          makeDefault
+          enableDamping
+          minDistance={1e-5}
+          maxDistance={1e12}
+          zoomSpeed={1}
+          panSpeed={0.9}
+        />
       </Canvas>
     </div>
   );

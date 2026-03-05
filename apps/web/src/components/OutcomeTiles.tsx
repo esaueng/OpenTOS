@@ -26,10 +26,10 @@ function Thumbnail({ base64 }: { base64: string }) {
       const source = Array.isArray(node.material) ? node.material[0] : node.material;
       const material = source.clone();
       material.wireframe = false;
-      material.transparent = true;
+      material.transparent = false;
       if (node.name === "preserved") {
         material.color = new THREE.Color("#35d07f");
-        material.opacity = 0.18;
+        material.opacity = 1;
         material.metalness = 0.08;
         material.roughness = 0.72;
       } else {
@@ -40,6 +40,7 @@ function Thumbnail({ base64 }: { base64: string }) {
         material.emissive = new THREE.Color("#10161f");
         material.emissiveIntensity = 0.23;
       }
+      material.side = THREE.DoubleSide;
       material.needsUpdate = true;
       node.material = material;
     });
