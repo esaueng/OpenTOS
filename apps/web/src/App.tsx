@@ -419,7 +419,7 @@ export default function App() {
                 setPlaceForceMode(false);
               }}
             >
-              Paint Preserved
+              Select Preserved Surface
             </button>
             <button
               type="button"
@@ -443,6 +443,9 @@ export default function App() {
               onChange={(event) => setBrushRadius(Number(event.target.value))}
             />
           </label>
+          <p className="small-note">
+            Preserved mode: click once inside a through-hole to select its full inner surface.
+          </p>
           <p className="small-note">Preserved faces: {preservedCount}</p>
         </section>
 

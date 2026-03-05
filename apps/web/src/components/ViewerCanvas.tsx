@@ -47,6 +47,16 @@ interface EditablePartProps {
   onPlaceForce: (point: [number, number, number], normal: [number, number, number]) => void;
 }
 
+type SurfaceGrowData = {
+  faceNormals: THREE.Vector3[];
+  adjacency: number[][];
+};
+
+function quantizedVertexKey(x: number, y: number, z: number): string {
+  const q = 1e5;
+  return `${Math.round(x * q)}:${Math.round(y * q)}:${Math.round(z * q)}`;
+}
+
 function EditablePart({
   geometry,
   faceLabels,
@@ -84,6 +94,74 @@ function EditablePart({
       centers.push(new THREE.Vector3().add(vA).add(vB).add(vC).multiplyScalar(1 / 3));
     }
     return centers;
+  }, [editableGeometry, faceCount]);
+
+  const surfaceGrowData = useMemo<SurfaceGrowData>(() => {
+    const pos = editableGeometry.attributes.position;
+    const faceNormals = Array.from({ length: faceCount }, () => new THREE.Vector3(0, 0, 1));
+    const adjacency = Array.from({ length: faceCount }, () => [] as number[]);
+    const edgeMap = new Map<string, number[]>();
+
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const ac = new THREE.Vector3();
+
+    for (let faceIdx = 0; faceIdx < faceCount; faceIdx += 1) {
+      const i0 = faceIdx * 3;
+      const i1 = i0 + 1;
+      const i2 = i0 + 2;
+
+      a.fromBufferAttribute(pos, i0);
+      b.fromBufferAttribute(pos, i1);
+      c.fromBufferAttribute(pos, i2);
+
+      ab.subVectors(b, a);
+      ac.subVectors(c, a);
+      const n = new THREE.Vector3().crossVectors(ab, ac);
+      if (n.lengthSq() > 1e-12) {
+        n.normalize();
+      } else {
+        n.set(0, 0, 1);
+      }
+      faceNormals[faceIdx] = n;
+
+      const k0 = quantizedVertexKey(a.x, a.y, a.z);
+      const k1 = quantizedVertexKey(b.x, b.y, b.z);
+      const k2 = quantizedVertexKey(c.x, c.y, c.z);
+      const edges: [string, string][] = [
+        [k0, k1],
+        [k1, k2],
+        [k2, k0]
+      ];
+
+      for (const [u, v] of edges) {
+        const key = u < v ? `${u}|${v}` : `${v}|${u}`;
+        const faces = edgeMap.get(key);
+        if (faces) {
+          faces.push(faceIdx);
+        } else {
+          edgeMap.set(key, [faceIdx]);
+        }
+      }
+    }
+
+    edgeMap.forEach((faces) => {
+      if (faces.length < 2) {
+        return;
+      }
+      for (let i = 0; i < faces.length; i += 1) {
+        for (let j = i + 1; j < faces.length; j += 1) {
+          const f0 = faces[i];
+          const f1 = faces[j];
+          adjacency[f0].push(f1);
+          adjacency[f1].push(f0);
+        }
+      }
+    });
+
+    return { faceNormals, adjacency };
   }, [editableGeometry, faceCount]);
 
   const brushRadiusWorld = useMemo(() => {
@@ -145,6 +223,40 @@ function EditablePart({
     onPaintFaces(targets);
   };
 
+  const selectContiguousSurface = (startFaceIndex: number): number[] => {
+    const { faceNormals, adjacency } = surfaceGrowData;
+    if (startFaceIndex < 0 || startFaceIndex >= faceNormals.length) {
+      return [];
+    }
+
+    const visited = new Uint8Array(faceNormals.length);
+    const queue: number[] = [startFaceIndex];
+    const selected: number[] = [];
+    const cosineThreshold = Math.cos(THREE.MathUtils.degToRad(34));
+
+    visited[startFaceIndex] = 1;
+
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      selected.push(current);
+
+      const currentNormal = faceNormals[current];
+      for (const next of adjacency[current]) {
+        if (visited[next]) {
+          continue;
+        }
+
+        const dot = currentNormal.dot(faceNormals[next]);
+        if (dot >= cosineThreshold) {
+          visited[next] = 1;
+          queue.push(next);
+        }
+      }
+    }
+
+    return selected;
+  };
+
   const placeForce = (event: ThreeEvent<MouseEvent>) => {
     if (!placeForceMode) {
       return;
@@ -167,6 +279,14 @@ function EditablePart({
       geometry={editableGeometry}
       onPointerDown={(event) => {
         if (!placeForceMode && paintLabel) {
+          if (paintLabel === "preserved") {
+            const faceIndex = event.faceIndex;
+            if (faceIndex != null && faceIndex >= 0 && faceIndex < faceCount) {
+              onPaintFaces(selectContiguousSurface(faceIndex));
+            }
+            return;
+          }
+
           setIsPainting(true);
           paint(event);
         }
