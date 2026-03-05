@@ -6,6 +6,7 @@ interface DensitySolveArgs {
   grid: VoxelGrid;
   domainMask: Uint8Array;
   preserveMask: Uint8Array;
+  anchorMask: Uint8Array;
   influence: Float32Array;
   targetVolumeFraction: number;
   iterations: number;
@@ -131,10 +132,136 @@ function enforceThickness(
   return shaped;
 }
 
+function smoothDensityField(src: Float32Array, domainMask: Uint8Array, grid: VoxelGrid, iterations: number): Float32Array {
+  let field = src;
+  for (let i = 0; i < iterations; i += 1) {
+    field = neighborSmooth(field, domainMask, grid, 0.46);
+  }
+  return field;
+}
+
+function carveInteriorVoids(
+  occupancy: Uint8Array,
+  influence: Float32Array,
+  domainMask: Uint8Array,
+  preserveMask: Uint8Array,
+  grid: VoxelGrid,
+  aggressiveness: number
+): Uint8Array {
+  const carved = occupancy.slice();
+  const passes = Math.max(1, Math.min(3, Math.round(1 + aggressiveness * 2)));
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const next = carved.slice();
+    const threshold = 0.34 + aggressiveness * 0.22 + pass * 0.04;
+
+    for (let idx = 0; idx < carved.length; idx += 1) {
+      if (!carved[idx] || !domainMask[idx] || preserveMask[idx]) {
+        continue;
+      }
+
+      const { x, y, z } = decodeIndex(grid, idx);
+      let neighborCount = 0;
+      let occupiedCount = 0;
+
+      for (const [dx, dy, dz] of NEIGHBORS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const nz = z + dz;
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+          continue;
+        }
+        const nIdx = index3D(grid, nx, ny, nz);
+        if (!domainMask[nIdx]) {
+          continue;
+        }
+        neighborCount += 1;
+        if (carved[nIdx]) {
+          occupiedCount += 1;
+        }
+      }
+
+      const fullyInterior = neighborCount >= 5 && occupiedCount >= neighborCount;
+      if (!fullyInterior) {
+        continue;
+      }
+
+      if (influence[idx] < threshold) {
+        next[idx] = 0;
+      }
+    }
+
+    carved.set(next);
+  }
+
+  return carved;
+}
+
+function retainConnectedToAnchors(
+  occupancy: Uint8Array,
+  domainMask: Uint8Array,
+  preserveMask: Uint8Array,
+  anchorMask: Uint8Array,
+  grid: VoxelGrid
+): Uint8Array {
+  const kept = new Uint8Array(occupancy.length);
+  const visited = new Uint8Array(occupancy.length);
+  const queue = new Int32Array(occupancy.length);
+  let head = 0;
+  let tail = 0;
+
+  const enqueue = (idx: number): void => {
+    if (visited[idx] || !occupancy[idx] || !domainMask[idx]) {
+      return;
+    }
+    visited[idx] = 1;
+    kept[idx] = 1;
+    queue[tail] = idx;
+    tail += 1;
+  };
+
+  for (let i = 0; i < anchorMask.length; i += 1) {
+    if (anchorMask[i]) {
+      enqueue(i);
+    }
+  }
+
+  for (let i = 0; i < preserveMask.length; i += 1) {
+    if (preserveMask[i]) {
+      enqueue(i);
+    }
+  }
+
+  while (head < tail) {
+    const idx = queue[head];
+    head += 1;
+    const { x, y, z } = decodeIndex(grid, idx);
+
+    for (const [dx, dy, dz] of NEIGHBORS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      const nz = z + dz;
+      if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+        continue;
+      }
+      enqueue(index3D(grid, nx, ny, nz));
+    }
+  }
+
+  for (let i = 0; i < kept.length; i += 1) {
+    if (preserveMask[i]) {
+      kept[i] = 1;
+    }
+  }
+
+  return kept;
+}
+
 export function solveDensityField({
   grid,
   domainMask,
   preserveMask,
+  anchorMask,
   influence,
   targetVolumeFraction,
   iterations,
@@ -186,32 +313,37 @@ export function solveDensityField({
     }
   }
 
-  const thicknessEnforced = enforceThickness(occupancy, domainMask, preserveMask, grid, minThickness);
+  const carveAggressiveness = clamp01((0.38 - targetVolumeFraction) * 3.2);
+  const carved = carveInteriorVoids(occupancy, influence, domainMask, preserveMask, grid, carveAggressiveness);
+  const anchored = retainConnectedToAnchors(carved, domainMask, preserveMask, anchorMask, grid);
+  const thicknessEnforced = enforceThickness(anchored, domainMask, preserveMask, grid, minThickness);
+  const finalOccupancy = retainConnectedToAnchors(thicknessEnforced, domainMask, preserveMask, anchorMask, grid);
+  const densitySmoothed = smoothDensityField(rho, domainMask, grid, 2);
 
   let occupied = 0;
   let available = 0;
-  for (let i = 0; i < thicknessEnforced.length; i += 1) {
+  for (let i = 0; i < finalOccupancy.length; i += 1) {
     if (!domainMask[i] || preserveMask[i]) {
       continue;
     }
     available += 1;
-    if (thicknessEnforced[i]) {
+    if (finalOccupancy[i]) {
       occupied += 1;
-      rho[i] = Math.max(rho[i], 0.56);
+      densitySmoothed[i] = Math.max(densitySmoothed[i], 0.58);
     } else {
-      rho[i] = Math.min(rho[i], 0.49);
+      densitySmoothed[i] = Math.min(densitySmoothed[i], 0.45);
     }
   }
 
-  for (let i = 0; i < rho.length; i += 1) {
+  for (let i = 0; i < densitySmoothed.length; i += 1) {
     if (preserveMask[i]) {
-      rho[i] = 1;
+      densitySmoothed[i] = 1;
     }
   }
 
   return {
-    density: rho,
-    occupancy: thicknessEnforced,
+    density: densitySmoothed,
+    occupancy: finalOccupancy,
     volumeFraction: available > 0 ? occupied / available : 0
   };
 }

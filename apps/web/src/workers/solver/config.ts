@@ -6,8 +6,8 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
     targetVoxels: 3_200_000,
     minThicknessVoxels: 2,
     smoothIterations: 4,
-    taubinIterations: 12,
-    densityIterations: 26,
+    taubinIterations: 18,
+    densityIterations: 30,
     connectivityIterations: 16,
     maxTriangles: 260_000
   },
@@ -16,8 +16,8 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
     targetVoxels: 1_500_000,
     minThicknessVoxels: 2,
     smoothIterations: 3,
-    taubinIterations: 9,
-    densityIterations: 18,
+    taubinIterations: 13,
+    densityIterations: 22,
     connectivityIterations: 11,
     maxTriangles: 170_000
   },
@@ -26,7 +26,7 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
     targetVoxels: 550_000,
     minThicknessVoxels: 1,
     smoothIterations: 2,
-    taubinIterations: 6,
+    taubinIterations: 8,
     densityIterations: 11,
     connectivityIterations: 7,
     maxTriangles: 90_000

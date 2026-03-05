@@ -12,13 +12,13 @@ export function variantParams(index: number, count: number, minThickness: number
   const k = hash01(index * 7.63 + jitterSeed * 9.41);
 
   return {
-    targetVolumeFraction: 0.23 + (1 - t) * 0.22 + (j - 0.5) * 0.035,
-    directionWeight: 0.4 + (1 - t) * 0.2 + (k - 0.5) * 0.04,
-    connectivityWeight: 0.3 + t * 0.16 + (j - 0.5) * 0.03,
-    boundaryWeight: 0.28 + t * 0.12,
-    smoothFactor: 0.24 + t * 0.18,
+    targetVolumeFraction: 0.11 + (1 - t) * 0.17 + (j - 0.5) * 0.03,
+    directionWeight: 0.5 + (1 - t) * 0.22 + (k - 0.5) * 0.05,
+    connectivityWeight: 0.42 + t * 0.18 + (j - 0.5) * 0.04,
+    boundaryWeight: 0.08 + t * 0.1,
+    smoothFactor: 0.2 + t * 0.14,
     minThickness: Math.max(1, minThickness + Math.round((k - 0.5) * 1.5)),
-    ribBoost: 0.12 + (1 - t) * 0.2 + (j - 0.5) * 0.04
+    ribBoost: 0.22 + (1 - t) * 0.26 + (j - 0.5) * 0.06
   };
 }
 

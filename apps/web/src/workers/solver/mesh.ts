@@ -211,9 +211,10 @@ export function extractIsoSurface(
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(triangles), 3));
-  const welded = BufferGeometryUtils.mergeVertices(geometry, grid.step * 0.15);
+  const welded = BufferGeometryUtils.mergeVertices(geometry, grid.step * 0.34);
   welded.computeVertexNormals();
   taubinSmoothIndexed(welded, taubinIterations);
+  taubinSmoothIndexed(welded, Math.max(2, Math.round(taubinIterations * 0.35)));
   return welded;
 }
 

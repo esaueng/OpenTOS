@@ -35,10 +35,10 @@ function Thumbnail({ base64 }: { base64: string }) {
       } else {
         material.color = new THREE.Color("#2e3a46");
         material.opacity = 1;
-        material.metalness = 0.9;
-        material.roughness = 0.18;
+        material.metalness = 0.5;
+        material.roughness = 0.44;
         material.emissive = new THREE.Color("#10161f");
-        material.emissiveIntensity = 0.23;
+        material.emissiveIntensity = 0.08;
       }
       material.side = THREE.DoubleSide;
       material.needsUpdate = true;

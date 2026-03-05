@@ -205,6 +205,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       grid,
       domainMask,
       preserveMask,
+      anchorMask: forceSeeds,
       influence,
       targetVolumeFraction: clamp01(params.targetVolumeFraction),
       iterations: qualityConfig.densityIterations,
