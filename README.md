@@ -5,16 +5,18 @@ OpenTOS is a web-based, Autodesk-inspired Generative Design platform focused on 
 ## Features
 
 - Upload `STL`, `OBJ`, or `GLB` models.
-- Brush-paint preserved regions directly on triangle faces.
+- Brush-paint design, preserved, and obstacle regions directly on triangle faces.
 - One-click contiguous preserved-surface selection (for example, full through-hole wall selection in one click).
 - Place and edit multiple force vectors in 3D.
-- Configure study setup (material, safety factor, manufacturing mode, outcome count).
-- Run asynchronous studies via `/api/solve` and monitor progress stages.
+- Define study targets (safety factor, mass-reduction goal, outcome count).
+- Run asynchronous studies via v2 study/job endpoints and monitor staged progress.
 - Compare multiple outcomes in an Autodesk-style grid with:
   - Volume
   - Mass estimate
+  - Mass reduction %
   - Stress proxy
   - Displacement proxy
+  - Safety proxy
 - Toggle original vs generated overlays and wireframe inspection.
 
 ## Monorepo Layout
@@ -63,7 +65,7 @@ echo 'VITE_SOLVER_MODE=browser' > .env.local
 npm run dev
 ```
 
-In browser mode, `Run Generative Study` does not call `/api/solve`; it computes outcomes locally and streams progress in the UI.
+In browser mode, `Run Generative Study` runs locally in a worker and streams progress in the UI.
 
 The browser solver synthesis is tuned for Autodesk/Discovery-style visuals:
 
@@ -87,26 +89,25 @@ Quality profiles are available for browser solve mode:
 
 ## API Contract
 
-### `POST /api/solve`
+### `POST /api/studies`
+Creates a study definition from mesh + constraints + load cases.
 
-- Default behavior: asynchronous (`202`)
-- Returns:
+### `GET /api/studies/{studyId}`
+Returns persisted study definition.
 
-```json
-{
-  "jobId": "job_xxx",
-  "statusUrl": "http://localhost:8000/api/jobs/job_xxx"
-}
-```
-
-- `?wait=true`: synchronous compatibility mode (`200`) returning `{ "outcomes": [...] }`.
+### `POST /api/studies/{studyId}/run`
+Starts an async run with optional run options (`qualityProfile`, `seed`, `outcomeCountOverride`).
 
 ### `GET /api/jobs/{jobId}`
+Returns job state, v2 stage, progress, warnings, solver version, and final outcomes when complete.
 
-Returns job state, stage, progress, and final outcomes when complete.
+### `GET /api/studies/{studyId}/outcomes`
+Returns all generated outcomes for a study.
+
+### `GET /api/benchmarks/{benchmarkId}`
+Returns built-in benchmark templates/reports for parity checks.
 
 ### `GET /api/materials`
-
 Returns available materials (MVP default: Aluminum 6061).
 
 ## Generative Assumptions
@@ -128,7 +129,7 @@ Detailed notes: `docs/solver-assumptions.md`.
 ## Extending with Real Solvers
 
 - Implement `SolverAdapter` in `apps/api/app/solver/interfaces.py`.
-- Keep output shape unchanged (`Outcome` with GLB + metrics).
+- Keep output shape aligned with `OutcomeV2` (GLB + `OutcomeMetricsV2`).
 - Inject your solver into `JobManager` startup.
 
 See `docs/extension-guide.md` for detailed integration guidance.

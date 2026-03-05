@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Outcome } from "@contracts/index";
+import type { OutcomeV2 } from "@contracts/index";
 import * as THREE from "three";
 
 import { OutcomeTiles } from "./components/OutcomeTiles";
 import { ViewerCanvas } from "./components/ViewerCanvas";
 import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
-import { applyFaceLabels, buildSolvePayload, getPreservedFaceIndices, initializeFaceLabels } from "./lib/studyState";
+import {
+  applyFaceLabels,
+  buildSolvePayload,
+  getObstacleFaceIndices,
+  getPreservedFaceIndices,
+  initializeFaceLabels
+} from "./lib/studyState";
 import type {
   BrowserQualityProfile,
   ForceState,
@@ -32,7 +38,7 @@ type BrowserWorkerMessage =
     }
   | {
       type: "result";
-      outcomes: Outcome[];
+      outcomes: OutcomeV2[];
       qualityProfile: BrowserQualityProfile;
       warnings: string[];
     }
@@ -44,19 +50,25 @@ type BrowserWorkerMessage =
 const STAGES: JobStatus["stage"][] = [
   "queued",
   "parse",
+  "constraint-map",
   "voxelize",
-  "field-solve",
-  "variant-synth",
-  "export",
+  "fem-solve",
+  "topology-opt",
+  "reconstruct",
+  "rank-export",
   "complete"
 ];
 
 function stageLabel(stage: JobStatus["stage"]): string {
   switch (stage) {
-    case "field-solve":
-      return "Field Solve";
-    case "variant-synth":
-      return "Variant Synthesis";
+    case "constraint-map":
+      return "Constraint Map";
+    case "fem-solve":
+      return "FE Proxy Solve";
+    case "topology-opt":
+      return "Topology Optimization";
+    case "rank-export":
+      return "Rank & Export";
     default:
       return stage.replace("-", " ");
   }
@@ -75,15 +87,16 @@ export default function App() {
     units: "mm",
     material: "Aluminum 6061",
     targetSafetyFactor: 2,
-    manufacturingConstraint: "Additive",
-    outcomeCount: 4
+    outcomeCount: 4,
+    massReductionGoalPct: 45
   });
   const [qualityProfile, setQualityProfile] = useState<BrowserQualityProfile>("high-fidelity");
 
+  const [studyId, setStudyId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [outcomes, setOutcomes] = useState<Outcome[]>([]);
+  const [outcomes, setOutcomes] = useState<OutcomeV2[]>([]);
   const [selectedOutcomeId, setSelectedOutcomeId] = useState<string | null>(null);
   const [selectedOutcomeObject, setSelectedOutcomeObject] = useState<THREE.Object3D | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
@@ -127,6 +140,7 @@ export default function App() {
 
         setJobStatus(payload);
         setWorkerWarnings(payload.warnings ?? []);
+        setStudyId(payload.studyId);
 
         if (payload.status === "succeeded") {
           setOutcomes(payload.outcomes ?? []);
@@ -193,6 +207,7 @@ export default function App() {
   }, [model, outcomes, selectedOutcomeId]);
 
   const preservedCount = useMemo(() => getPreservedFaceIndices(faceLabels).length, [faceLabels]);
+  const obstacleCount = useMemo(() => getObstacleFaceIndices(faceLabels).length, [faceLabels]);
 
   const onUploadFile = async (file: File) => {
     setError(null);
@@ -207,6 +222,9 @@ export default function App() {
     setOutcomes([]);
     setSelectedOutcomeId(null);
     setSelectedOutcomeObject(null);
+    setStudyId(null);
+    setJobId(null);
+    setJobStatus(null);
   };
 
   const loadSamplePart = async () => {
@@ -289,7 +307,7 @@ export default function App() {
         material: settings.material,
         targetSafetyFactor: settings.targetSafetyFactor,
         outcomeCount: settings.outcomeCount,
-        manufacturingConstraint: settings.manufacturingConstraint
+        massReductionGoalPct: settings.massReductionGoalPct
       });
 
       if (isBrowserSolver) {
@@ -304,17 +322,20 @@ export default function App() {
 
         const transferablePositions = new Float32Array(solvePositionsAttr.array as Float32Array);
         setWorkerWarnings([]);
+        setStudyId("browser-local");
 
         setJobStatus({
           jobId: "browser-local",
+          studyId: "browser-local",
           status: "queued",
           stage: "queued",
           progress: 0,
+          solverVersion: "opentos-v2-browser",
           qualityProfile,
           warnings: []
         });
 
-        const localResult = await new Promise<{ outcomes: Outcome[]; qualityProfile: BrowserQualityProfile; warnings: string[] }>(
+        const localResult = await new Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }>(
           (resolve, reject) => {
             const cleanup = () => {
               worker.terminate();
@@ -332,9 +353,11 @@ export default function App() {
               if (msg.type === "progress") {
                 setJobStatus({
                   jobId: "browser-local",
+                  studyId: "browser-local",
                   status: msg.status,
                   stage: msg.stage,
                   progress: msg.progress,
+                  solverVersion: "opentos-v2-browser",
                   qualityProfile: msg.qualityProfile,
                   warnings: msg.warnings,
                   etaSeconds: msg.etaSeconds
@@ -396,33 +419,53 @@ export default function App() {
         return;
       }
 
-      const response = await fetch(apiUrl("/api/solve"), {
+      const createStudyResponse = await fetch(apiUrl("/api/studies"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        if ((response.status === 404 || response.status === 405) && !text.trim()) {
+      if (!createStudyResponse.ok) {
+        const text = await createStudyResponse.text();
+        if ((createStudyResponse.status === 404 || createStudyResponse.status === 405) && !text.trim()) {
           const apiTarget = API_BASE || `${window.location.origin} (same-origin /api)`;
           setError(
-            `API endpoint rejected POST (${response.status}). This deployment is likely serving static assets only. Configure VITE_API_BASE to your backend URL. Current target: ${apiTarget}`
+            `API endpoint rejected POST (${createStudyResponse.status}). This deployment is likely serving static assets only. Configure VITE_API_BASE to your backend URL. Current target: ${apiTarget}`
           );
         } else {
-          setError(`Solve request failed (${response.status}): ${text}`);
+          setError(`Study creation failed (${createStudyResponse.status}): ${text}`);
         }
         return;
       }
 
-      const accepted = (await response.json()) as { jobId: string };
+      const created = (await createStudyResponse.json()) as { study: { id: string } };
+      const createdStudyId = created.study.id;
+      setStudyId(createdStudyId);
+
+      const runResponse = await fetch(apiUrl(`/api/studies/${createdStudyId}/run`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qualityProfile
+        })
+      });
+
+      if (!runResponse.ok) {
+        const text = await runResponse.text();
+        setError(`Study run request failed (${runResponse.status}): ${text}`);
+        return;
+      }
+
+      const accepted = (await runResponse.json()) as { jobId: string };
       setJobId(accepted.jobId);
       setJobStatus({
         jobId: accepted.jobId,
+        studyId: createdStudyId,
         status: "queued",
         stage: "queued",
         progress: 0,
-        warnings: []
+        warnings: [],
+        solverVersion: "opentos-v2-api"
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown network error";
@@ -500,6 +543,16 @@ export default function App() {
             >
               Paint Design
             </button>
+            <button
+              type="button"
+              className={paintLabel === "obstacle" ? "is-active" : ""}
+              onClick={() => {
+                setPaintLabel("obstacle");
+                setPlaceForceMode(false);
+              }}
+            >
+              Paint Obstacle
+            </button>
           </div>
           <label>
             Brush Radius
@@ -516,6 +569,7 @@ export default function App() {
             Preserved mode: click once inside a through-hole to select its full inner surface.
           </p>
           <p className="small-note">Preserved faces: {preservedCount}</p>
+          <p className="small-note">Obstacle faces: {obstacleCount}</p>
         </section>
 
         <section className="panel-card">
@@ -649,26 +703,22 @@ export default function App() {
             />
           </label>
           <label>
-            Manufacturing
-            <select
-              value={settings.manufacturingConstraint}
-              onChange={(event) =>
-                setSettings((curr) => ({
-                  ...curr,
-                  manufacturingConstraint: event.target.value as StudySettings["manufacturingConstraint"]
-                }))
-              }
-            >
-              <option value="Additive">Additive</option>
-              <option value="3-axis milling">3-axis milling</option>
-            </select>
+            Mass Reduction Goal (%)
+            <input
+              type="number"
+              min={5}
+              max={80}
+              step={1}
+              value={settings.massReductionGoalPct}
+              onChange={(event) => setSettings((curr) => ({ ...curr, massReductionGoalPct: Number(event.target.value) }))}
+            />
           </label>
           <label>
             Outcomes
             <input
               type="number"
               min={2}
-              max={8}
+              max={12}
               step={1}
               value={settings.outcomeCount}
               onChange={(event) => setSettings((curr) => ({ ...curr, outcomeCount: Number(event.target.value) }))}
@@ -746,7 +796,15 @@ export default function App() {
                 <progress max={1} value={jobStatus.progress} />
                 <div className="stage-track">
                   {STAGES.map((stage) => (
-                    <span key={stage} className={STAGES.indexOf(stage) <= STAGES.indexOf(jobStatus.stage) ? "is-hit" : ""}>
+                    <span
+                      key={stage}
+                      className={
+                        STAGES.indexOf(stage) <=
+                        Math.max(0, STAGES.indexOf(jobStatus.stage === "failed" ? "complete" : jobStatus.stage))
+                          ? "is-hit"
+                          : ""
+                      }
+                    >
                       {stageLabel(stage)}
                     </span>
                   ))}

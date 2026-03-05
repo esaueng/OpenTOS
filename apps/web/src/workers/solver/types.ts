@@ -1,8 +1,17 @@
-import type { Outcome, SolveRequest } from "@contracts/index";
+import type { OutcomeV2, StudyCreateRequest } from "@contracts/index";
 
 export type BrowserQualityProfile = "high-fidelity" | "balanced" | "fast-preview";
 
-export type WorkerStage = "queued" | "parse" | "voxelize" | "field-solve" | "variant-synth" | "export" | "complete";
+export type WorkerStage =
+  | "queued"
+  | "parse"
+  | "constraint-map"
+  | "voxelize"
+  | "fem-solve"
+  | "topology-opt"
+  | "reconstruct"
+  | "rank-export"
+  | "complete";
 
 export type WorkerStatus = "queued" | "running" | "succeeded";
 
@@ -11,7 +20,7 @@ export interface BrowserSolveGeometry {
 }
 
 export interface BrowserSolvePayload {
-  request: SolveRequest;
+  request: StudyCreateRequest;
   geometry: BrowserSolveGeometry;
   qualityProfile: BrowserQualityProfile;
 }
@@ -33,7 +42,7 @@ export type WorkerProgressMessage = {
 
 export type WorkerResultMessage = {
   type: "result";
-  outcomes: Outcome[];
+  outcomes: OutcomeV2[];
   qualityProfile: BrowserQualityProfile;
   warnings: string[];
 };

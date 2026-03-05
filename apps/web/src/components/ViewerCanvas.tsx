@@ -17,6 +17,8 @@ import type { ForceState, RegionLabel } from "../types";
 
 const LABEL_COLORS: Record<RegionLabel, THREE.ColorRepresentation> = {
   preserved: "#35d07f",
+  fixed: "#35d07f",
+  obstacle: "#f59e0b",
   design: "#8a95ad",
   unassigned: "#526071"
 };
@@ -362,7 +364,7 @@ function EditablePart({
         metalness={0.25}
         roughness={0.45}
         vertexColors
-        side={THREE.DoubleSide}
+        side={THREE.FrontSide}
       />
     </mesh>
   );
@@ -434,7 +436,7 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
           material.emissive = new THREE.Color("#0f141b");
           material.emissiveIntensity = 0.07;
         }
-        material.side = THREE.DoubleSide;
+        material.side = THREE.FrontSide;
 
         material.needsUpdate = true;
         node.material = material;

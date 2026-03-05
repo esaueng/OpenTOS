@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
-import type { Outcome } from "@contracts/index";
+import type { OutcomeV2 } from "@contracts/index";
 
 import { parseGlbFromBase64 } from "../lib/modelParsers";
 
 interface OutcomeTilesProps {
-  outcomes: Outcome[];
+  outcomes: OutcomeV2[];
   selectedOutcomeId: string | null;
   onSelectOutcome: (outcomeId: string) => void;
 }
@@ -110,8 +110,10 @@ export function OutcomeTiles({ outcomes, selectedOutcomeId, onSelectOutcome }: O
             <div className="tile-metrics">
               <span>Volume: {formatMetric(outcome.metrics.volume)}</span>
               <span>Mass: {formatMetric(outcome.metrics.mass)}</span>
+              <span>Mass Δ: {formatMetric(outcome.metrics.massReductionPct)}%</span>
               <span>Stress: {formatMetric(outcome.metrics.stressProxy)}</span>
               <span>Disp: {formatMetric(outcome.metrics.displacementProxy)}</span>
+              <span>Safety: {formatMetric(outcome.metrics.safetyIndexProxy)}</span>
             </div>
           </button>
         );

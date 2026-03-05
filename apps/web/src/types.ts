@@ -1,9 +1,9 @@
-import type { Outcome, SolveRequest } from "@contracts/index";
+import type { JobStageV2, JobStateV2, OutcomeV2, QualityProfile, StudyCreateRequest } from "@contracts/index";
 import type * as THREE from "three";
 
-export type RegionLabel = "preserved" | "design" | "unassigned";
+export type RegionLabel = "preserved" | "design" | "obstacle" | "fixed" | "unassigned";
 
-export type BrowserQualityProfile = "high-fidelity" | "balanced" | "fast-preview";
+export type BrowserQualityProfile = QualityProfile;
 
 export interface UploadedModel {
   fileName: string;
@@ -28,8 +28,8 @@ export interface StudySettings {
   units: "mm" | "in" | "m";
   material: "Aluminum 6061";
   targetSafetyFactor: number;
-  manufacturingConstraint: "3-axis milling" | "Additive";
   outcomeCount: number;
+  massReductionGoalPct: number;
 }
 
 export interface BrowserSolveConfig {
@@ -38,14 +38,16 @@ export interface BrowserSolveConfig {
 
 export interface JobStatus {
   jobId: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "canceled";
-  stage: "queued" | "parse" | "voxelize" | "field-solve" | "variant-synth" | "export" | "complete" | "failed";
+  studyId: string;
+  status: JobStateV2;
+  stage: JobStageV2;
   progress: number;
+  solverVersion: string;
   qualityProfile?: BrowserQualityProfile;
   warnings?: string[];
   etaSeconds?: number;
   error?: string;
-  outcomes?: Outcome[];
+  outcomes?: OutcomeV2[];
 }
 
 export interface BuildSolvePayloadArgs {
@@ -56,7 +58,7 @@ export interface BuildSolvePayloadArgs {
   material: StudySettings["material"];
   targetSafetyFactor: number;
   outcomeCount: number;
-  manufacturingConstraint: StudySettings["manufacturingConstraint"];
+  massReductionGoalPct: number;
 }
 
-export type SolvePayload = SolveRequest;
+export type SolvePayload = StudyCreateRequest;
