@@ -39,6 +39,11 @@ type ForceVec = {
   magnitudeN: number;
 };
 
+type PreservedData = {
+  allFaces: Set<number>;
+  groups: number[][];
+};
+
 const UNIT_TO_METERS: Record<SolveRequest["units"], number> = {
   mm: 0.001,
   in: 0.0254,
@@ -153,16 +158,49 @@ function faceCount(geometry: THREE.BufferGeometry): number {
   return Math.floor(geometry.attributes.position.count / 3);
 }
 
-function getPreservedFaceSet(request: SolveRequest, totalFaces: number): Set<number> {
-  const preserved = new Set<number>();
+function getPreservedData(request: SolveRequest, totalFaces: number): PreservedData {
+  const allFaces = new Set<number>();
+  const groups: number[][] = [];
+
   for (const region of request.preservedRegions) {
+    const group: number[] = [];
     for (const idx of region.faceIndices) {
       if (idx >= 0 && idx < totalFaces) {
-        preserved.add(idx);
+        allFaces.add(idx);
+        group.push(idx);
       }
     }
+    if (group.length) {
+      groups.push(group);
+    }
   }
-  return preserved;
+
+  return { allFaces, groups };
+}
+
+function computeRegionCenters(positions: Float32Array, groups: number[][], allFaces: Set<number>): THREE.Vector3[] {
+  const centers: THREE.Vector3[] = [];
+
+  for (const group of groups) {
+    if (!group.length) {
+      continue;
+    }
+    const c = new THREE.Vector3();
+    for (const faceIdx of group) {
+      c.add(faceCenter(positions, faceIdx));
+    }
+    c.multiplyScalar(1 / group.length);
+    centers.push(c);
+  }
+
+  if (!centers.length && allFaces.size) {
+    const c = new THREE.Vector3();
+    allFaces.forEach((faceIdx) => c.add(faceCenter(positions, faceIdx)));
+    c.multiplyScalar(1 / allFaces.size);
+    centers.push(c);
+  }
+
+  return centers;
 }
 
 function faceCenter(positions: Float32Array, faceIndex: number): THREE.Vector3 {
@@ -352,13 +390,150 @@ function computeVolumeFromGeometry(geometry: THREE.BufferGeometry): number {
   return Math.abs(sum / 6);
 }
 
-function variantParams(index: number, count: number): { threshold: number; smoothIters: number; smoothAlpha: number; thickness: number } {
+function computeSurfaceAreaFromGeometry(geometry: THREE.BufferGeometry): number {
+  const g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const pos = g.getAttribute("position");
+  if (!pos || pos.itemSize !== 3) {
+    return 0;
+  }
+
+  const p = pos.array as Float32Array;
+  let area = 0;
+  for (let i = 0; i < p.length; i += 9) {
+    const ax = p[i];
+    const ay = p[i + 1];
+    const az = p[i + 2];
+    const bx = p[i + 3];
+    const by = p[i + 4];
+    const bz = p[i + 5];
+    const cx = p[i + 6];
+    const cy = p[i + 7];
+    const cz = p[i + 8];
+
+    const abx = bx - ax;
+    const aby = by - ay;
+    const abz = bz - az;
+    const acx = cx - ax;
+    const acy = cy - ay;
+    const acz = cz - az;
+    const crossX = aby * acz - abz * acy;
+    const crossY = abz * acx - abx * acz;
+    const crossZ = abx * acy - aby * acx;
+    area += 0.5 * Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+  }
+  return area;
+}
+
+function hash01(seed: number): number {
+  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function getNearestIndices(points: THREE.Vector3[], from: THREE.Vector3, count: number): number[] {
+  const ranked = points
+    .map((p, idx) => ({ idx, dist: p.distanceToSquared(from) }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, count);
+  return ranked.map((r) => r.idx);
+}
+
+function makeCurvedTube(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  radius: number,
+  seed: number,
+  segments: number
+): THREE.BufferGeometry {
+  const ab = b.clone().sub(a);
+  const mid = a.clone().lerp(b, 0.5);
+  const dir = ab.clone().normalize();
+  const fallback = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const normal = dir.clone().cross(fallback).normalize();
+  const bendAmt = (hash01(seed) - 0.5) * 2.0 * radius * (2.0 + hash01(seed + 5.1));
+  mid.addScaledVector(normal, bendAmt);
+
+  const curve = new THREE.CatmullRomCurve3([a.clone(), mid, b.clone()]);
+  return new THREE.TubeGeometry(curve, segments, radius, 12, false);
+}
+
+function createOrganicRibNetwork(
+  preservedCenters: THREE.Vector3[],
+  forcePoints: THREE.Vector3[],
+  bbox: THREE.Box3,
+  params: {
+    thickness: number;
+    ribRadius: number;
+  },
+  variantIndex: number
+): THREE.BufferGeometry | null {
+  const pieces: THREE.BufferGeometry[] = [];
+  const connectionKeys = new Set<string>();
+  const diag = Math.max(bbox.min.distanceTo(bbox.max), 1e-6);
+  const baseRadius = Math.max(diag * params.ribRadius, params.thickness * 1.3);
+
+  const addConnection = (a: THREE.Vector3, b: THREE.Vector3, seed: number, scale = 1) => {
+    const key = `${Math.min(seed, seed + 1)}:${a.toArray().join(",")}:${b.toArray().join(",")}`;
+    if (connectionKeys.has(key)) {
+      return;
+    }
+    connectionKeys.add(key);
+    pieces.push(makeCurvedTube(a, b, baseRadius * scale, seed, 22));
+  };
+
+  // Force-driven ribs to nearest preserved interfaces.
+  for (let i = 0; i < forcePoints.length; i += 1) {
+    const fp = forcePoints[i];
+    const nearest = getNearestIndices(preservedCenters, fp, Math.min(3, Math.max(1, preservedCenters.length)));
+    nearest.forEach((idx, n) => {
+      addConnection(fp, preservedCenters[idx], variantIndex * 100 + i * 10 + n, 1.0 + n * 0.15);
+    });
+  }
+
+  // Secondary triangulation among preserved interfaces for truss-like voids.
+  for (let i = 0; i < preservedCenters.length; i += 1) {
+    const p = preservedCenters[i];
+    const others = preservedCenters.filter((_v, idx) => idx !== i);
+    if (!others.length) {
+      continue;
+    }
+    const nearest = getNearestIndices(others, p, Math.min(2, others.length));
+    nearest.forEach((localIdx, n) => {
+      addConnection(p, others[localIdx], variantIndex * 200 + i * 11 + n, 0.8);
+    });
+  }
+
+  // Junction blobs for smooth node transitions.
+  const nodeRadius = baseRadius * 1.45;
+  [...preservedCenters, ...forcePoints].forEach((node, idx) => {
+    const sphere = new THREE.IcosahedronGeometry(nodeRadius * (0.9 + hash01(variantIndex + idx) * 0.35), 1);
+    sphere.translate(node.x, node.y, node.z);
+    pieces.push(sphere);
+  });
+
+  if (!pieces.length) {
+    return null;
+  }
+  return BufferGeometryUtils.mergeGeometries(pieces, false);
+}
+
+function variantParams(index: number, count: number): {
+  threshold: number;
+  smoothIters: number;
+  smoothAlpha: number;
+  thickness: number;
+  cutoutBias: number;
+  cutoutFrequency: number;
+  ribRadius: number;
+} {
   const t = count <= 1 ? 0 : index / (count - 1);
   return {
-    threshold: 0.38 + t * 0.28,
-    smoothIters: 2 + (index % 3),
-    smoothAlpha: 0.16 + (index % 4) * 0.045,
-    thickness: 0.008 + (1 - t) * 0.016
+    threshold: 0.36 + t * 0.2,
+    smoothIters: 3 + (index % 4),
+    smoothAlpha: 0.2 + (index % 3) * 0.04,
+    thickness: 0.009 + (1 - t) * 0.014,
+    cutoutBias: 0.28 + t * 0.22,
+    cutoutFrequency: 5.5 + index * 0.7,
+    ribRadius: 0.011 + (1 - t) * 0.012
   };
 }
 
@@ -385,7 +560,19 @@ function buildGeneratedGeometry(
   preservedFaces: Set<number>,
   influence: Float32Array,
   forceDirs: THREE.Vector3[],
-  params: { threshold: number; smoothIters: number; smoothAlpha: number; thickness: number }
+  forcePoints: THREE.Vector3[],
+  preservedCenters: THREE.Vector3[],
+  bbox: THREE.Box3,
+  params: {
+    threshold: number;
+    smoothIters: number;
+    smoothAlpha: number;
+    thickness: number;
+    cutoutBias: number;
+    cutoutFrequency: number;
+    ribRadius: number;
+  },
+  variantIndex: number
 ): { preserved: THREE.BufferGeometry; generated: THREE.BufferGeometry; keptFaceArea: number } {
   const positionsAttr = sourceNonIndexed.getAttribute("position");
   if (!positionsAttr || positionsAttr.itemSize !== 3) {
@@ -405,7 +592,20 @@ function buildGeneratedGeometry(
     }
 
     const score = influence[faceIdx];
-    const keep = score >= params.threshold || score >= params.threshold * 0.88 && (faceIdx % 7 === 0);
+    const center = faceCenter(positions, faceIdx);
+    const wave =
+      0.5 +
+      0.5 *
+        Math.sin(
+          center.x * params.cutoutFrequency +
+            center.y * params.cutoutFrequency * 0.77 +
+            center.z * params.cutoutFrequency * 0.54 +
+            variantIndex * 0.85
+        );
+    const keep =
+      score >= params.threshold && wave >= params.cutoutBias ||
+      score >= 0.84 ||
+      (score >= params.threshold * 0.94 && faceIdx % 9 === variantIndex % 9);
     if (keep) {
       keptDesignFaces.push(faceIdx);
     }
@@ -469,14 +669,22 @@ function buildGeneratedGeometry(
     gp.needsUpdate = true;
   }
 
-  const mergedGenerated = BufferGeometryUtils.mergeVertices(generated, 1e-5);
+  const ribs = createOrganicRibNetwork(preservedCenters, forcePoints, bbox, params, variantIndex);
+  const combined = ribs ? BufferGeometryUtils.mergeGeometries([generated, ribs], false) : generated;
+  if (!combined) {
+    throw new Error("Failed to merge generated shell and rib network");
+  }
+
+  const mergedGenerated = BufferGeometryUtils.mergeVertices(combined, 1e-5);
   mergedGenerated.computeVertexNormals();
   smoothIndexedGeometry(mergedGenerated, params.smoothIters, params.smoothAlpha);
+
+  const ribArea = ribs ? computeSurfaceAreaFromGeometry(ribs) : 0;
 
   return {
     preserved,
     generated: mergedGenerated,
-    keptFaceArea
+    keptFaceArea: keptFaceArea + ribArea * 0.42
   };
 }
 
@@ -491,8 +699,8 @@ async function solveInWorker(request: SolveRequest): Promise<Outcome[]> {
     throw new Error("Model has too few faces for browser solve");
   }
 
-  const preservedFaces = getPreservedFaceSet(request, totalFaces);
-  if (preservedFaces.size === 0) {
+  const preservedData = getPreservedData(request, totalFaces);
+  if (preservedData.allFaces.size === 0) {
     throw new Error("No preserved faces selected");
   }
 
@@ -507,7 +715,8 @@ async function solveInWorker(request: SolveRequest): Promise<Outcome[]> {
   const forces = normalizeForces(request);
   postMessageTyped({ type: "progress", stage: "voxelize", progress: 0.2, status: "running" });
 
-  const influence = computeFaceInfluence(positions, totalFaces, preservedFaces, forces, bbox);
+  const influence = computeFaceInfluence(positions, totalFaces, preservedData.allFaces, forces, bbox);
+  const preservedCenters = computeRegionCenters(positions, preservedData.groups, preservedData.allFaces);
   postMessageTyped({ type: "progress", stage: "field-solve", progress: 0.38, status: "running" });
 
   const outcomes: Outcome[] = [];
@@ -524,10 +733,14 @@ async function solveInWorker(request: SolveRequest): Promise<Outcome[]> {
 
     const { preserved, generated, keptFaceArea } = buildGeneratedGeometry(
       sourceNonIndexed,
-      preservedFaces,
+      preservedData.allFaces,
       influence,
       forces.map((f) => f.direction),
-      params
+      forces.map((f) => f.point),
+      preservedCenters,
+      bbox,
+      params,
+      idx
     );
 
     const scene = new THREE.Scene();
@@ -539,7 +752,7 @@ async function solveInWorker(request: SolveRequest): Promise<Outcome[]> {
 
     const generatedMesh = new THREE.Mesh(
       generated,
-      new THREE.MeshStandardMaterial({ color: 0x96a6bf, metalness: 0.24, roughness: 0.48 })
+      new THREE.MeshStandardMaterial({ color: 0x2f353d, metalness: 0.78, roughness: 0.24 })
     );
     generatedMesh.name = "generated";
 
