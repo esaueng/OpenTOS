@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opentos.dev/schema/study-run-options.schema.json",
+  "title": "RunOptions",
+  "type": "object",
+  "properties": {
+    "qualityProfile": {
+      "type": "string",
+      "enum": ["high-fidelity", "balanced", "fast-preview"]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "outcomeCountOverride": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    }
+  },
+  "additionalProperties": false
+}

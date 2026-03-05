@@ -65,15 +65,20 @@ export function geometrySurfaceArea(geometry: THREE.BufferGeometry): number {
 export function computeOutcomeMetrics(args: {
   generatedGeometry: THREE.BufferGeometry;
   preservedGeometry: THREE.BufferGeometry;
+  baselineVolume: number;
   units: "mm" | "in" | "m";
   material: string;
   forces: ForceVec[];
   characteristicLength: number;
 }): {
+  baselineVolume: number;
   volume: number;
   mass: number;
+  massReductionPct: number;
   stressProxy: number;
   displacementProxy: number;
+  safetyIndexProxy: number;
+  complianceProxy: number;
 } {
   const volume = geometryVolume(args.generatedGeometry) + geometryVolume(args.preservedGeometry);
   const unitScale = UNIT_TO_METERS[args.units] ?? 1;
@@ -93,11 +98,20 @@ export function computeOutcomeMetrics(args: {
     (totalForce * Math.max(args.characteristicLength * unitScale, 1e-6)) /
     (eModulus * effectiveArea) *
     1000;
+  const baselineVolume = Math.max(args.baselineVolume, 1e-9);
+  const massReductionPct = ((baselineVolume - volume) / baselineVolume) * 100;
+  const yieldStrength = 276;
+  const safetyIndexProxy = yieldStrength / Math.max(stressProxy, 1e-6);
+  const complianceProxy = displacementProxy * (totalForce / 1000 + 1);
 
   return {
+    baselineVolume: Number(baselineVolume.toFixed(6)),
     volume: Number(volume.toFixed(6)),
     mass: Number(mass.toFixed(6)),
+    massReductionPct: Number(massReductionPct.toFixed(6)),
     stressProxy: Number(stressProxy.toFixed(6)),
-    displacementProxy: Number(displacementProxy.toFixed(6))
+    displacementProxy: Number(displacementProxy.toFixed(6)),
+    safetyIndexProxy: Number(safetyIndexProxy.toFixed(6)),
+    complianceProxy: Number(complianceProxy.toFixed(6))
   };
 }

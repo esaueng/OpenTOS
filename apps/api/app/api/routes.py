@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.materials import MATERIALS
-from app.core.schema_validation import validate_solve_payload
+from app.core.schema_validation import validate_run_options_payload, validate_study_payload
 from app.models.contracts import (
-    JobStatusResponse,
+    BenchmarkResponse,
+    JobStatusV2,
     MaterialDef,
     MaterialsResponse,
-    SolveAcceptedResponse,
-    SolveRequest,
-    SolveResponse,
+    OutcomesResponse,
+    RunOptions,
+    StudyCreateRequest,
+    StudyCreateResponse,
+    StudyDefinition,
+    StudyRunResponse,
 )
 from app.workers.job_manager import JobManager
 
-router = APIRouter(prefix="/api", tags=["generative-design"])
+router = APIRouter(prefix="/api", tags=["generative-design-v2"])
 
 
 def get_job_manager(request: Request) -> JobManager:
@@ -38,31 +41,52 @@ def list_materials() -> MaterialsResponse:
     return MaterialsResponse(materials=materials)
 
 
-@router.post(
-    "/solve",
-    response_model=SolveAcceptedResponse | SolveResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def solve_study(
-    body: SolveRequest,
-    request: Request,
-    wait: bool = Query(default=False),
-    manager: JobManager = Depends(get_job_manager),
-) -> SolveAcceptedResponse | SolveResponse:
-    validate_solve_payload(body.model_dump(mode="json"))
+@router.post("/studies", response_model=StudyCreateResponse)
+def create_study(body: StudyCreateRequest, manager: JobManager = Depends(get_job_manager)) -> StudyCreateResponse:
+    validate_study_payload(body.model_dump(mode="json"))
+    study = manager.create_study(body)
+    return StudyCreateResponse(study=study)
 
-    if wait:
-        outcomes = manager.run_sync(body)
-        return JSONResponse(status_code=status.HTTP_200_OK, content=SolveResponse(outcomes=outcomes).model_dump(mode="json"))
 
-    job_id = manager.create_and_enqueue(body)
+@router.get("/studies/{study_id}", response_model=StudyDefinition)
+def get_study(study_id: str, manager: JobManager = Depends(get_job_manager)) -> StudyDefinition:
+    study = manager.get_study(study_id)
+    if study is None:
+        raise HTTPException(status_code=404, detail=f"Study '{study_id}' not found")
+    return study
+
+
+@router.post("/studies/{study_id}/run", response_model=StudyRunResponse)
+def run_study(study_id: str, body: RunOptions, request: Request, manager: JobManager = Depends(get_job_manager)) -> StudyRunResponse:
+    validate_run_options_payload(body.model_dump(mode="json"))
+    try:
+        job_id = manager.run_study(study_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     base = str(request.base_url).rstrip("/")
-    return SolveAcceptedResponse(jobId=job_id, statusUrl=f"{base}/api/jobs/{job_id}")
+    return StudyRunResponse(jobId=job_id, statusUrl=f"{base}/api/jobs/{job_id}")
 
 
-@router.get("/jobs/{job_id}", response_model=JobStatusResponse)
-def get_job_status(job_id: str, manager: JobManager = Depends(get_job_manager)) -> JobStatusResponse:
+@router.get("/jobs/{job_id}", response_model=JobStatusV2)
+def get_job_status(job_id: str, manager: JobManager = Depends(get_job_manager)) -> JobStatusV2:
     response = manager.get_status(job_id)
     if response is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     return response
+
+
+@router.get("/studies/{study_id}/outcomes", response_model=OutcomesResponse)
+def get_study_outcomes(study_id: str, manager: JobManager = Depends(get_job_manager)) -> OutcomesResponse:
+    study = manager.get_study(study_id)
+    if study is None:
+        raise HTTPException(status_code=404, detail=f"Study '{study_id}' not found")
+    return OutcomesResponse(studyId=study_id, outcomes=manager.get_outcomes(study_id))
+
+
+@router.get("/benchmarks/{benchmark_id}", response_model=BenchmarkResponse)
+def get_benchmark(benchmark_id: str, manager: JobManager = Depends(get_job_manager)) -> BenchmarkResponse:
+    benchmark = manager.get_benchmark(benchmark_id)
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found")
+    return benchmark

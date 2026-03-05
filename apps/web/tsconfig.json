@@ -16,7 +16,7 @@
     "paths": {
       "@contracts/*": ["../../packages/contracts/src/*"]
     },
-    "types": ["vitest/globals"]
+    "types": ["vite/client", "vitest/globals"]
   },
   "include": ["src", "vite.config.ts"]
 }

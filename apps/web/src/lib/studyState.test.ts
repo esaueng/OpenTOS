@@ -43,11 +43,12 @@ describe("study state helpers", () => {
       material: "Aluminum 6061",
       targetSafetyFactor: 2,
       outcomeCount: 4,
-      manufacturingConstraint: "Additive"
+      massReductionGoalPct: 45
     });
 
     expect(payload.preservedRegions[0].faceIndices).toEqual([1]);
-    expect(payload.forces[0].direction[2]).toBeCloseTo(-1);
-    expect(payload.forces[0].point).toEqual([-0.5, 0, 1]);
+    expect(payload.loadCases[0].forces[0].direction[2]).toBeCloseTo(-1);
+    expect(payload.loadCases[0].forces[0].point).toEqual([-0.5, 0, 1]);
+    expect(payload.targets.massReductionGoalPct).toBe(45);
   });
 });

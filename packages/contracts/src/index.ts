@@ -1,13 +1,27 @@
 export type DistanceUnit = "mm" | "in" | "m";
 export type ForceUnit = "N" | "lb";
 export type ModelFormat = "stl" | "obj" | "glb";
+export type QualityProfile = "high-fidelity" | "balanced" | "fast-preview";
+
+export type JobStateV2 = "queued" | "running" | "succeeded" | "failed" | "canceled";
+export type JobStageV2 =
+  | "queued"
+  | "parse"
+  | "constraint-map"
+  | "voxelize"
+  | "fem-solve"
+  | "topology-opt"
+  | "reconstruct"
+  | "rank-export"
+  | "complete"
+  | "failed";
 
 export interface EncodedModel {
   format: ModelFormat;
   dataBase64: string;
 }
 
-export interface PreservedRegion {
+export interface FaceRegion {
   id: string;
   faceIndices: number[];
 }
@@ -20,46 +34,111 @@ export interface ForceDef {
   label?: string;
 }
 
-export interface SolveRequest {
+export interface LoadCase {
+  id: string;
+  fixedRegions: string[];
+  forces: ForceDef[];
+}
+
+export interface ConstraintSet {
+  designRegion: {
+    faceIndices: number[];
+  };
+  preservedRegions: FaceRegion[];
+  obstacleRegions: FaceRegion[];
+}
+
+export interface RunTargets {
+  safetyFactor: number;
+  outcomeCount: number;
+  massReductionGoalPct: number;
+}
+
+export interface StudyCreateRequest {
   model: EncodedModel;
   units: DistanceUnit;
-  preservedRegions: PreservedRegion[];
-  forces: ForceDef[];
+  designRegion: {
+    faceIndices: number[];
+  };
+  preservedRegions: FaceRegion[];
+  obstacleRegions: FaceRegion[];
+  loadCases: LoadCase[];
   material: "Aluminum 6061";
-  targetSafetyFactor: number;
-  outcomeCount: number;
-  manufacturingConstraint?: "3-axis milling" | "Additive";
+  targets: RunTargets;
 }
 
-export interface OutcomeMetrics {
+export interface StudyDefinition extends StudyCreateRequest {
+  id: string;
+  createdAt: string;
+}
+
+export interface RunOptions {
+  qualityProfile?: QualityProfile;
+  seed?: number;
+  outcomeCountOverride?: number;
+}
+
+export interface OutcomeMetricsV2 {
+  baselineVolume: number;
   volume: number;
   mass: number;
+  massReductionPct: number;
   stressProxy: number;
   displacementProxy: number;
+  safetyIndexProxy: number;
+  complianceProxy: number;
 }
 
-export interface Outcome {
+export interface OutcomeV2 {
   id: string;
-  optimizedModel: EncodedModel;
-  metrics: OutcomeMetrics;
+  optimizedModel: {
+    format: "glb";
+    dataBase64: string;
+  };
+  metrics: OutcomeMetricsV2;
+  variantParams?: Record<string, string | number | boolean>;
+  warnings?: string[];
 }
 
-export interface SolveResponse {
-  outcomes: Outcome[];
+export interface StudyCreateResponse {
+  study: StudyDefinition;
 }
 
-export interface SolveAcceptedResponse {
+export interface StudyRunResponse {
   jobId: string;
   statusUrl: string;
 }
 
-export interface JobStatusResponse {
+export interface OutcomesResponse {
+  studyId: string;
+  outcomes: OutcomeV2[];
+}
+
+export interface JobStatusV2 {
   jobId: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "canceled";
-  stage: "queued" | "parse" | "voxelize" | "field-solve" | "variant-synth" | "export" | "complete" | "failed";
+  studyId: string;
+  status: JobStateV2;
+  stage: JobStageV2;
   progress: number;
+  etaSeconds?: number;
+  warnings: string[];
+  solverVersion: string;
   error?: string;
-  outcomes?: Outcome[];
+  outcomes?: OutcomeV2[];
+}
+
+export interface BenchmarkReport {
+  baselineVolume: number;
+  targetMassReductionPct: number;
+  notes: string[];
+}
+
+export interface BenchmarkResponse {
+  id: string;
+  name: string;
+  description: string;
+  defaultStudy: Omit<StudyCreateRequest, "model">;
+  report: BenchmarkReport;
 }
 
 export interface MaterialDef {
@@ -75,7 +154,7 @@ export interface MaterialsResponse {
   materials: MaterialDef[];
 }
 
-export type RegionLabel = "preserved" | "design" | "unassigned";
+export type RegionLabel = "preserved" | "design" | "obstacle" | "fixed" | "unassigned";
 
 export interface RegionLabelMap {
   labelsByFaceIndex: Record<number, RegionLabel>;

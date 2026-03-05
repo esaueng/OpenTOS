@@ -6,9 +6,9 @@ import io
 import numpy as np
 import trimesh
 
-from app.models.contracts import SolveRequest
+from app.models.contracts import RunOptions, StudyCreateRequest
 from app.solver.fusion_solver import FusionApproxSolver
-from app.solver.normalization import normalize_request
+from app.solver.normalization import normalize_study
 
 
 def _box_obj_base64() -> str:
@@ -37,23 +37,30 @@ f 4 5 1
     return base64.b64encode(obj.encode("utf-8")).decode("utf-8")
 
 
-def _request(outcome_count: int = 3) -> SolveRequest:
-    return SolveRequest(
+def _request(outcome_count: int = 3) -> StudyCreateRequest:
+    return StudyCreateRequest(
         model={"format": "obj", "dataBase64": _box_obj_base64()},
         units="m",
-        preservedRegions=[{"id": "preserved", "faceIndices": [0, 1, 2, 3]}],
-        forces=[
-            {"point": [0.55, 0.0, 0.0], "direction": [-1, 0.2, 0], "magnitude": 1200, "unit": "N"},
-            {"point": [-0.55, 0.0, 0.0], "direction": [1, -0.2, 0], "magnitude": 900, "unit": "N"},
+        designRegion={"faceIndices": list(range(12))},
+        preservedRegions=[{"id": "mountA", "faceIndices": [0, 1, 2, 3]}],
+        obstacleRegions=[],
+        loadCases=[
+            {
+                "id": "LC-1",
+                "fixedRegions": ["mountA"],
+                "forces": [
+                    {"point": [0.55, 0.0, 0.0], "direction": [-1, 0.2, 0], "magnitude": 1200, "unit": "N"},
+                    {"point": [-0.55, 0.0, 0.0], "direction": [1, -0.2, 0], "magnitude": 900, "unit": "N"},
+                ],
+            }
         ],
         material="Aluminum 6061",
-        targetSafetyFactor=2.2,
-        outcomeCount=outcome_count,
+        targets={"safetyFactor": 2.2, "outcomeCount": outcome_count, "massReductionGoalPct": 45.0},
     )
 
 
-def test_solver_generates_outcomes_with_metrics() -> None:
-    study = normalize_request(_request(outcome_count=3))
+def test_solver_generates_outcomes_with_v2_metrics() -> None:
+    study = normalize_study(_request(outcome_count=3), RunOptions(qualityProfile="balanced"))
     solver = FusionApproxSolver()
 
     progress_events: list[tuple[str, float]] = []
@@ -64,18 +71,21 @@ def test_solver_generates_outcomes_with_metrics() -> None:
     outcomes = solver.solve(study, progress)
 
     assert len(outcomes) >= 1
-    assert any(stage == "variant-synth" for stage, _ in progress_events)
+    assert any(stage == "topology-opt" for stage, _ in progress_events)
 
     first = outcomes[0]
     assert first.glb_bytes.startswith(b"glTF")
+    assert first.metrics["baselineVolume"] > 0
     assert first.metrics["volume"] > 0
     assert first.metrics["mass"] > 0
     assert first.metrics["stressProxy"] > 0
     assert first.metrics["displacementProxy"] >= 0
+    assert first.metrics["safetyIndexProxy"] > 0
+    assert "massReductionPct" in first.metrics
 
 
 def test_solver_variants_are_not_all_duplicates() -> None:
-    study = normalize_request(_request(outcome_count=4))
+    study = normalize_study(_request(outcome_count=4), RunOptions(qualityProfile="balanced"))
     solver = FusionApproxSolver()
     outcomes = solver.solve(study, lambda _stage, _pct: None)
 
@@ -85,7 +95,7 @@ def test_solver_variants_are_not_all_duplicates() -> None:
 
 
 def test_glb_contains_preserved_and_generated_nodes() -> None:
-    study = normalize_request(_request(outcome_count=2))
+    study = normalize_study(_request(outcome_count=2), RunOptions(qualityProfile="balanced"))
     solver = FusionApproxSolver()
     outcome = solver.solve(study, lambda _stage, _pct: None)[0]
 
@@ -93,5 +103,4 @@ def test_glb_contains_preserved_and_generated_nodes() -> None:
     assert isinstance(loaded, trimesh.Scene)
     names = list(loaded.graph.nodes_geometry)
 
-    # Preserved geometry is exported as an explicit immutable node.
     assert any("preserved" in name for name in names)

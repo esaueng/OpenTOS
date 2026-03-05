@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import type { Outcome, SolveRequest } from "@contracts/index";
+import type { OutcomeV2, StudyCreateRequest } from "@contracts/index";
 
 import { resolveQualityProfile } from "./solver/config";
 import {
@@ -8,13 +8,14 @@ import {
   computeBoundingBox,
   estimateSolverMemoryBytes,
   faceCountFromPositions,
+  getFaceSet,
   getPreservedData
 } from "./solver/geometry";
 import { combineInfluenceFields, computeBaseInfluenceFields } from "./solver/fields";
 import { exportOutcomeGlb } from "./solver/export";
 import { clamp01 } from "./solver/math";
 import { extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
-import { computeOutcomeMetrics } from "./solver/metrics";
+import { computeOutcomeMetrics, geometryVolume } from "./solver/metrics";
 import { solveDensityField } from "./solver/optimize";
 import type {
   BrowserQualityProfile,
@@ -26,9 +27,9 @@ import type {
 } from "./solver/types";
 import { computeSignature, isUniqueVariant, variantParams } from "./solver/variants";
 import {
+  dilateMask,
   distanceFromMask,
   forceSeedMask,
-  regionCenterMask,
   rasterizePreservedMask,
   voxelizeDomain
 } from "./solver/voxel";
@@ -63,22 +64,57 @@ function postProgress(args: ProgressArgs): void {
   });
 }
 
-function normalizeForces(request: SolveRequest): ForceVec[] {
-  return request.forces.map((force) => {
-    const [dx, dy, dz] = force.direction;
-    const len = Math.hypot(dx, dy, dz);
-    const direction: [number, number, number] =
-      len <= 1e-12 ? [0, 0, 1] : [dx / len, dy / len, dz / len];
+function normalizeForces(request: StudyCreateRequest): ForceVec[] {
+  const all: ForceVec[] = [];
+  for (const loadCase of request.loadCases) {
+    for (const force of loadCase.forces) {
+      const [dx, dy, dz] = force.direction;
+      const len = Math.hypot(dx, dy, dz);
+      const direction: [number, number, number] =
+        len <= 1e-12 ? [0, 0, 1] : [dx / len, dy / len, dz / len];
 
-    return {
-      point: [force.point[0], force.point[1], force.point[2]],
-      direction,
-      magnitudeN: force.magnitude * FORCE_TO_NEWTONS[force.unit]
-    };
-  });
+      all.push({
+        point: [force.point[0], force.point[1], force.point[2]],
+        direction,
+        magnitudeN: force.magnitude * FORCE_TO_NEWTONS[force.unit]
+      });
+    }
+  }
+  return all;
 }
 
-async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: Outcome[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
+function fixedFacesFromLoadCases(request: StudyCreateRequest): Set<number> {
+  const byId = new Map<string, number[]>();
+  for (const region of request.preservedRegions) {
+    byId.set(region.id, region.faceIndices);
+  }
+
+  const fixed = new Set<number>();
+  for (const loadCase of request.loadCases) {
+    for (const fixedRegionId of loadCase.fixedRegions) {
+      const faces = byId.get(fixedRegionId);
+      if (!faces) {
+        continue;
+      }
+      for (const face of faces) {
+        fixed.add(face);
+      }
+    }
+  }
+  return fixed;
+}
+
+function baselineVolumeFromPositions(positions: Float32Array): number {
+  const g = makePreservedGeometry(
+    positions,
+    new Set(Array.from({ length: faceCountFromPositions(positions) }, (_, i) => i))
+  );
+  const volume = geometryVolume(g);
+  g.dispose();
+  return volume;
+}
+
+async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
   const request = payload.request;
   const warnings: string[] = [];
 
@@ -97,22 +133,33 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const totalFaces = faceCountFromPositions(positions);
   const preservedData = getPreservedData(request, totalFaces);
+  const fixedFaceSet = fixedFacesFromLoadCases(request);
+  const designFaceSet = getFaceSet(request.designRegion.faceIndices, totalFaces);
+  const obstacleFaceSet = new Set<number>();
+  for (const region of request.obstacleRegions) {
+    for (const face of region.faceIndices) {
+      if (face >= 0 && face < totalFaces) {
+        obstacleFaceSet.add(face);
+      }
+    }
+  }
 
   if (preservedData.allFaces.size === 0) {
     throw new Error("No preserved faces selected");
   }
 
-  if (request.forces.length === 0) {
+  const forces = normalizeForces(request);
+  if (forces.length === 0) {
     throw new Error("No force definitions provided");
   }
 
-  const estimatedMemory = estimateSolverMemoryBytes(3_200_000, request.outcomeCount);
+  const estimatedMemory = estimateSolverMemoryBytes(3_200_000, request.targets.outcomeCount);
   const qualityResolution = resolveQualityProfile(payload.qualityProfile, estimatedMemory);
   const qualityConfig = qualityResolution.profile;
   warnings.push(...qualityResolution.warnings);
 
   postProgress({
-    stage: "parse",
+    stage: "constraint-map",
     progress: 0.08,
     status: "running",
     qualityProfile: qualityConfig.id,
@@ -121,52 +168,66 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const bbox = computeBoundingBox(positions);
   const grid = buildVoxelGrid(positions, qualityConfig.targetVoxels);
+  const { domainMask } = voxelizeDomain(positions, grid);
 
   postProgress({
     stage: "voxelize",
-    progress: 0.14,
+    progress: 0.16,
     status: "running",
     qualityProfile: qualityConfig.id,
     warnings
   });
 
-  const { domainMask } = voxelizeDomain(positions, grid);
   const preserveMask = rasterizePreservedMask(
     positions,
-    preservedData.allFaces,
+    new Set([...preservedData.allFaces, ...fixedFaceSet]),
     grid,
     grid.step * 0.95
   );
+
+  const obstacleMask = obstacleFaceSet.size
+    ? dilateMask(rasterizePreservedMask(positions, obstacleFaceSet, grid, grid.step * 0.95), grid, 1)
+    : new Uint8Array(grid.total);
+
+  const designMask = designFaceSet.size
+    ? dilateMask(rasterizePreservedMask(positions, designFaceSet, grid, grid.step * 1.1), grid, 3)
+    : domainMask.slice();
 
   for (let i = 0; i < preserveMask.length; i += 1) {
     if (!domainMask[i]) {
       preserveMask[i] = 0;
     }
+    if (obstacleMask[i]) {
+      designMask[i] = 0;
+    }
   }
 
-  const forces = normalizeForces(request);
-  const forceSeeds = forceSeedMask(forces, domainMask, grid);
-  const preserveRegionSeeds = regionCenterMask(preservedData.groups, positions, domainMask, grid);
-
-  let forceSeedCount = 0;
-  for (let i = 0; i < forceSeeds.length; i += 1) {
-    forceSeedCount += forceSeeds[i];
-  }
-  if (forceSeedCount === 0) {
-    throw new Error("Forces could not be mapped into design domain");
+  const constrainedDomain = new Uint8Array(grid.total);
+  let constrainedCount = 0;
+  for (let i = 0; i < grid.total; i += 1) {
+    const allowed = domainMask[i] && designMask[i] && !obstacleMask[i];
+    constrainedDomain[i] = allowed ? 1 : 0;
+    if (allowed) {
+      constrainedCount += 1;
+    }
   }
 
+  if (constrainedCount < 1000) {
+    throw new Error("Design region/obstacle constraints removed most of the domain");
+  }
+
+  const forceSeeds = forceSeedMask(forces, constrainedDomain, grid);
   const preserveSeedMask = new Uint8Array(grid.total);
   for (let i = 0; i < grid.total; i += 1) {
-    preserveSeedMask[i] = preserveMask[i] || preserveRegionSeeds[i] ? 1 : 0;
+    preserveSeedMask[i] = preserveMask[i] ? 1 : 0;
   }
 
-  const preservedDistance = distanceFromMask(preserveSeedMask, domainMask, grid);
-  const forceDistance = distanceFromMask(forceSeeds, domainMask, grid);
+  const preservedDistance = distanceFromMask(preserveSeedMask, constrainedDomain, grid);
+  const forceDistance = distanceFromMask(forceSeeds, constrainedDomain, grid);
 
   postProgress({
-    stage: "field-solve",
-    progress: 0.32,
+    stage: "fem-solve",
+    progress: 0.3,
     status: "running",
     qualityProfile: qualityConfig.id,
     warnings
@@ -174,36 +235,31 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const baseFields = computeBaseInfluenceFields(
     grid,
-    domainMask,
+    constrainedDomain,
     preservedDistance,
     forceDistance,
     forces,
     qualityConfig.connectivityIterations
   );
 
-  postProgress({
-    stage: "variant-synth",
-    progress: 0.42,
-    status: "running",
-    qualityProfile: qualityConfig.id,
-    warnings
-  });
-
-  const outcomes: Outcome[] = [];
+  const outcomes: OutcomeV2[] = [];
   const acceptedVariants: { occupancy: Uint8Array; signature: ReturnType<typeof computeSignature> }[] = [];
-  const targetUnique = Math.max(1, request.outcomeCount - 1);
+  const targetUnique = Math.max(1, request.targets.outcomeCount - 1);
 
   const startedAt = Date.now();
-  const maxAttempts = request.outcomeCount * 7;
+  const maxAttempts = request.targets.outcomeCount * 8;
   let attempt = 0;
+  const baselineVolume = baselineVolumeFromPositions(positions);
+  const targetFraction = clamp01(1 - request.targets.massReductionGoalPct / 100);
 
-  while (outcomes.length < request.outcomeCount && attempt < maxAttempts) {
-    const params = variantParams(outcomes.length, request.outcomeCount, qualityConfig.minThicknessVoxels, attempt);
-    const influence = combineInfluenceFields(baseFields, domainMask, params, request.targetSafetyFactor);
+  while (outcomes.length < request.targets.outcomeCount && attempt < maxAttempts) {
+    const params = variantParams(outcomes.length, request.targets.outcomeCount, qualityConfig.minThicknessVoxels, attempt);
+    params.targetVolumeFraction = clamp01(targetFraction + (params.targetVolumeFraction - 0.22) * 0.55);
+    const influence = combineInfluenceFields(baseFields, constrainedDomain, params, request.targets.safetyFactor);
 
     const densityResult = solveDensityField({
       grid,
-      domainMask,
+      domainMask: constrainedDomain,
       preserveMask,
       anchorMask: forceSeeds,
       influence,
@@ -213,12 +269,12 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       minThickness: params.minThickness
     });
 
-    const signature = computeSignature(densityResult.occupancy, domainMask);
-    const unique = isUniqueVariant(densityResult.occupancy, signature, acceptedVariants, domainMask);
+    const signature = computeSignature(densityResult.occupancy, constrainedDomain);
+    const unique = isUniqueVariant(densityResult.occupancy, signature, acceptedVariants, constrainedDomain);
 
     const allowDuplicateFallback =
       !unique &&
-      outcomes.length < request.outcomeCount &&
+      outcomes.length < request.targets.outcomeCount &&
       attempt >= Math.floor(maxAttempts * 0.65);
 
     if (!unique && !allowDuplicateFallback) {
@@ -226,10 +282,18 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       continue;
     }
 
+    postProgress({
+      stage: "topology-opt",
+      progress: 0.38 + (attempt / maxAttempts) * 0.32,
+      status: "running",
+      qualityProfile: qualityConfig.id,
+      warnings
+    });
+
     const generatedGeometry = extractIsoSurface(
       grid,
       densityResult.density,
-      domainMask,
+      constrainedDomain,
       0.52,
       qualityConfig.taubinIterations
     );
@@ -240,6 +304,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     const metrics = computeOutcomeMetrics({
       generatedGeometry,
       preservedGeometry,
+      baselineVolume,
       units: request.units,
       material: request.material,
       forces,
@@ -252,7 +317,13 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
         format: "glb",
         dataBase64: glbBase64
       },
-      metrics
+      metrics,
+      variantParams: {
+        targetVolumeFraction: Number(params.targetVolumeFraction.toFixed(4)),
+        smoothFactor: Number(params.smoothFactor.toFixed(4)),
+        minThickness: params.minThickness,
+        ribBoost: Number(params.ribBoost.toFixed(4))
+      }
     });
 
     acceptedVariants.push({
@@ -262,11 +333,11 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
     const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
     const perOutcome = elapsedSec / outcomes.length;
-    const remaining = request.outcomeCount - outcomes.length;
+    const remaining = request.targets.outcomeCount - outcomes.length;
 
     postProgress({
-      stage: "variant-synth",
-      progress: 0.42 + (outcomes.length / request.outcomeCount) * 0.45,
+      stage: "reconstruct",
+      progress: 0.7 + (outcomes.length / request.targets.outcomeCount) * 0.2,
       status: "running",
       qualityProfile: qualityConfig.id,
       warnings,
@@ -275,7 +346,6 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
     preservedGeometry.dispose();
     generatedGeometry.dispose();
-
     attempt += 1;
   }
 
@@ -285,15 +355,15 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     );
   }
 
-  if (outcomes.length < request.outcomeCount) {
+  if (outcomes.length < request.targets.outcomeCount) {
     warnings.push(
-      `Requested ${request.outcomeCount} outcomes but only ${outcomes.length} could be synthesized within runtime bounds.`
+      `Requested ${request.targets.outcomeCount} outcomes but only ${outcomes.length} were synthesized within runtime limits.`
     );
   }
 
   postProgress({
-    stage: "export",
-    progress: 0.93,
+    stage: "rank-export",
+    progress: 0.96,
     status: "running",
     qualityProfile: qualityConfig.id,
     warnings,

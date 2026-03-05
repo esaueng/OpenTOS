@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { SolveRequest } from "@contracts/index";
+import type { StudyCreateRequest } from "@contracts/index";
 
 import type { PreservedData, VoxelGrid } from "./types";
 
@@ -18,7 +18,7 @@ export function faceCountFromPositions(positions: Float32Array): number {
   return Math.floor(positions.length / 9);
 }
 
-export function getPreservedData(request: SolveRequest, totalFaces: number): PreservedData {
+export function getPreservedData(request: StudyCreateRequest, totalFaces: number): PreservedData {
   const allFaces = new Set<number>();
   const groups: number[][] = [];
 
@@ -36,6 +36,19 @@ export function getPreservedData(request: SolveRequest, totalFaces: number): Pre
   }
 
   return { allFaces, groups };
+}
+
+export function getFaceSet(
+  faceIndices: number[],
+  totalFaces: number
+): Set<number> {
+  const faces = new Set<number>();
+  for (const idx of faceIndices) {
+    if (idx >= 0 && idx < totalFaces) {
+      faces.add(idx);
+    }
+  }
+  return faces;
 }
 
 export function faceCenter(positions: Float32Array, faceIndex: number): [number, number, number] {

@@ -16,17 +16,28 @@ class NormalizedForce:
 
 
 @dataclass
-class NormalizedStudyInput:
+class NormalizedLoadCase:
+    id: str
+    fixed_face_indices: np.ndarray
+    forces: list[NormalizedForce]
+
+
+@dataclass
+class NormalizedStudyInputV2:
     mesh: trimesh.Trimesh
     source_mesh: trimesh.Trimesh
     units: str
     preserved_face_indices: np.ndarray
     design_face_indices: np.ndarray
-    forces: list[NormalizedForce]
+    obstacle_face_indices: np.ndarray
+    load_cases: list[NormalizedLoadCase]
     material: str
     target_safety_factor: float
+    target_mass_reduction_pct: float
     outcome_count: int
-    manufacturing_constraint: str | None
+    quality_profile: str
+    seed: int
+    baseline_volume_display: float
 
 
 @dataclass
@@ -41,5 +52,5 @@ ProgressCallback = Callable[[str, float], None]
 
 
 class SolverAdapter(Protocol):
-    def solve(self, study: NormalizedStudyInput, progress: ProgressCallback) -> list[SolverOutcomeResult]:
+    def solve(self, study: NormalizedStudyInputV2, progress: ProgressCallback) -> list[SolverOutcomeResult]:
         ...
