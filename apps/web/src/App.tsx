@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Outcome } from "@contracts/index";
 import * as THREE from "three";
 
@@ -11,6 +11,23 @@ import "./styles.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 const apiUrl = (path: string) => (API_BASE ? `${API_BASE}${path}` : path);
+const SOLVER_MODE = import.meta.env.VITE_SOLVER_MODE === "api" ? "api" : "browser";
+
+type BrowserWorkerMessage =
+  | {
+      type: "progress";
+      stage: JobStatus["stage"];
+      progress: number;
+      status: JobStatus["status"];
+    }
+  | {
+      type: "result";
+      outcomes: Outcome[];
+    }
+  | {
+      type: "error";
+      error: string;
+    };
 
 const STAGES: JobStatus["stage"][] = [
   "queued",
@@ -60,11 +77,20 @@ export default function App() {
   const [showOutcomeOverlay, setShowOutcomeOverlay] = useState(true);
   const [wireframe, setWireframe] = useState(false);
   const [isSubmittingStudy, setIsSubmittingStudy] = useState(false);
+  const workerRef = useRef<Worker | null>(null);
 
   const selectedForce = useMemo(
     () => forces.find((force) => force.id === selectedForceId) ?? null,
     [forces, selectedForceId]
   );
+  const isBrowserSolver = SOLVER_MODE === "browser";
+
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!jobId) {
@@ -242,6 +268,66 @@ export default function App() {
         manufacturingConstraint: settings.manufacturingConstraint
       });
 
+      if (isBrowserSolver) {
+        workerRef.current?.terminate();
+        const worker = new Worker(new URL("./workers/solverWorker.ts", import.meta.url), { type: "module" });
+        workerRef.current = worker;
+
+        setJobStatus({
+          jobId: "browser-local",
+          status: "queued",
+          stage: "queued",
+          progress: 0
+        });
+
+        const localOutcomes = await new Promise<Outcome[]>((resolve, reject) => {
+          const cleanup = () => {
+            worker.terminate();
+            if (workerRef.current === worker) {
+              workerRef.current = null;
+            }
+          };
+
+          worker.onmessage = (event: MessageEvent<BrowserWorkerMessage>) => {
+            const msg = event.data;
+            if (!msg) {
+              return;
+            }
+
+            if (msg.type === "progress") {
+              setJobStatus({
+                jobId: "browser-local",
+                status: msg.status,
+                stage: msg.stage,
+                progress: msg.progress
+              });
+              return;
+            }
+
+            if (msg.type === "result") {
+              cleanup();
+              resolve(msg.outcomes);
+              return;
+            }
+
+            cleanup();
+            reject(new Error(msg.error || "Browser solver failed"));
+          };
+
+          worker.onerror = (event) => {
+            cleanup();
+            reject(new Error(event.message || "Browser worker crashed"));
+          };
+
+          worker.postMessage({ type: "solve", payload });
+        });
+
+        setOutcomes(localOutcomes);
+        setSelectedOutcomeId(localOutcomes[0]?.id ?? null);
+        setJobId(null);
+        return;
+      }
+
       const response = await fetch(apiUrl("/api/solve"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -270,9 +356,9 @@ export default function App() {
         progress: 0
       });
     } catch (err) {
-      const apiTarget = API_BASE || "same origin (/api)";
       const message = err instanceof Error ? err.message : "Unknown network error";
-      if (message.toLowerCase().includes("failed to fetch")) {
+      if (!isBrowserSolver && message.toLowerCase().includes("failed to fetch")) {
+        const apiTarget = API_BASE || "same origin (/api)";
         setError(`Cannot reach API at ${apiTarget}. Set VITE_API_BASE to your backend URL.`);
       } else {
         setError(`Failed to start study: ${message}`);
@@ -526,6 +612,9 @@ export default function App() {
           </button>
           <p className="small-note run-hint">
             Required: model upload, at least 1 preserved face, and at least 1 force.
+          </p>
+          <p className="small-note run-hint">
+            Solver mode: {isBrowserSolver ? "Browser (local compute)" : "API (remote compute)"}
           </p>
           {error && <p className="panel-error">{error}</p>}
         </section>
