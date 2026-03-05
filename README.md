@@ -6,6 +6,7 @@ OpenTOS is a web-based, Autodesk-inspired Generative Design platform focused on 
 
 - Upload `STL`, `OBJ`, or `GLB` models.
 - Brush-paint preserved regions directly on triangle faces.
+- One-click contiguous preserved-surface selection (for example, full through-hole wall selection in one click).
 - Place and edit multiple force vectors in 3D.
 - Configure study setup (material, safety factor, manufacturing mode, outcome count).
 - Run asynchronous studies via `/api/solve` and monitor progress stages.
