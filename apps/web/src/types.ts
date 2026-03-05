@@ -3,11 +3,15 @@ import type * as THREE from "three";
 
 export type RegionLabel = "preserved" | "design" | "unassigned";
 
+export type BrowserQualityProfile = "high-fidelity" | "balanced" | "fast-preview";
+
 export interface UploadedModel {
   fileName: string;
   format: "stl" | "obj" | "glb";
   dataBase64: string;
   geometry: THREE.BufferGeometry;
+  solveGeometry: THREE.BufferGeometry;
+  solveToDisplayOffset: [number, number, number];
 }
 
 export interface ForceState {
@@ -28,11 +32,18 @@ export interface StudySettings {
   outcomeCount: number;
 }
 
+export interface BrowserSolveConfig {
+  qualityProfile: BrowserQualityProfile;
+}
+
 export interface JobStatus {
   jobId: string;
   status: "queued" | "running" | "succeeded" | "failed" | "canceled";
   stage: "queued" | "parse" | "voxelize" | "field-solve" | "variant-synth" | "export" | "complete" | "failed";
   progress: number;
+  qualityProfile?: BrowserQualityProfile;
+  warnings?: string[];
+  etaSeconds?: number;
   error?: string;
   outcomes?: Outcome[];
 }

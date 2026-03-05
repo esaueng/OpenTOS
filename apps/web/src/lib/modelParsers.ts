@@ -25,11 +25,46 @@ function findFirstMesh(object: THREE.Object3D): THREE.Mesh | null {
   return found;
 }
 
-function toEditableGeometry(input: THREE.BufferGeometry): THREE.BufferGeometry {
+function toSolveGeometry(input: THREE.BufferGeometry): THREE.BufferGeometry {
   const geo = input.index ? input.toNonIndexed() : input.clone();
   geo.computeVertexNormals();
-  geo.center();
   return geo;
+}
+
+function buildDisplayGeometry(solveGeometry: THREE.BufferGeometry): {
+  geometry: THREE.BufferGeometry;
+  solveToDisplayOffset: [number, number, number];
+} {
+  const geometry = solveGeometry.clone();
+  geometry.computeBoundingBox();
+  const center = new THREE.Vector3();
+  geometry.boundingBox?.getCenter(center);
+  geometry.translate(-center.x, -center.y, -center.z);
+  geometry.computeBoundingBox();
+  geometry.computeVertexNormals();
+  return {
+    geometry,
+    solveToDisplayOffset: [-center.x, -center.y, -center.z]
+  };
+}
+
+function asUploadedModel(
+  file: File,
+  format: UploadedModel["format"],
+  dataBase64: string,
+  sourceGeometry: THREE.BufferGeometry
+): UploadedModel {
+  const solveGeometry = toSolveGeometry(sourceGeometry);
+  const { geometry, solveToDisplayOffset } = buildDisplayGeometry(solveGeometry);
+
+  return {
+    fileName: file.name,
+    format,
+    dataBase64,
+    geometry,
+    solveGeometry,
+    solveToDisplayOffset
+  };
 }
 
 export async function parseModelFile(file: File): Promise<UploadedModel> {
@@ -45,12 +80,7 @@ export async function parseModelFile(file: File): Promise<UploadedModel> {
   if (format === "stl") {
     const loader = new STLLoader();
     const geometry = loader.parse(buffer);
-    return {
-      fileName: file.name,
-      format,
-      dataBase64: base64,
-      geometry: toEditableGeometry(geometry)
-    };
+    return asUploadedModel(file, format, base64, geometry);
   }
 
   if (format === "obj") {
@@ -62,12 +92,7 @@ export async function parseModelFile(file: File): Promise<UploadedModel> {
       throw new Error("OBJ file did not contain mesh geometry");
     }
 
-    return {
-      fileName: file.name,
-      format,
-      dataBase64: base64,
-      geometry: toEditableGeometry(mesh.geometry)
-    };
+    return asUploadedModel(file, format, base64, mesh.geometry);
   }
 
   const loader = new GLTFLoader();
@@ -77,12 +102,7 @@ export async function parseModelFile(file: File): Promise<UploadedModel> {
     throw new Error("GLB file did not contain mesh geometry");
   }
 
-  return {
-    fileName: file.name,
-    format,
-    dataBase64: base64,
-    geometry: toEditableGeometry(mesh.geometry)
-  };
+  return asUploadedModel(file, format, base64, mesh.geometry);
 }
 
 export async function parseGlbFromBase64(base64: string): Promise<THREE.Object3D> {

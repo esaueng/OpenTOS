@@ -6,7 +6,14 @@ import { OutcomeTiles } from "./components/OutcomeTiles";
 import { ViewerCanvas } from "./components/ViewerCanvas";
 import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
 import { applyFaceLabels, buildSolvePayload, getPreservedFaceIndices, initializeFaceLabels } from "./lib/studyState";
-import type { ForceState, JobStatus, RegionLabel, StudySettings, UploadedModel } from "./types";
+import type {
+  BrowserQualityProfile,
+  ForceState,
+  JobStatus,
+  RegionLabel,
+  StudySettings,
+  UploadedModel
+} from "./types";
 import "./styles.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
@@ -19,10 +26,15 @@ type BrowserWorkerMessage =
       stage: JobStatus["stage"];
       progress: number;
       status: JobStatus["status"];
+      qualityProfile: BrowserQualityProfile;
+      warnings: string[];
+      etaSeconds?: number;
     }
   | {
       type: "result";
       outcomes: Outcome[];
+      qualityProfile: BrowserQualityProfile;
+      warnings: string[];
     }
   | {
       type: "error";
@@ -66,6 +78,7 @@ export default function App() {
     manufacturingConstraint: "Additive",
     outcomeCount: 4
   });
+  const [qualityProfile, setQualityProfile] = useState<BrowserQualityProfile>("high-fidelity");
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
@@ -73,10 +86,11 @@ export default function App() {
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const [selectedOutcomeId, setSelectedOutcomeId] = useState<string | null>(null);
   const [selectedOutcomeObject, setSelectedOutcomeObject] = useState<THREE.Object3D | null>(null);
-  const [showOriginal, setShowOriginal] = useState(true);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [showOutcomeOverlay, setShowOutcomeOverlay] = useState(true);
   const [wireframe, setWireframe] = useState(false);
   const [isSubmittingStudy, setIsSubmittingStudy] = useState(false);
+  const [workerWarnings, setWorkerWarnings] = useState<string[]>([]);
   const workerRef = useRef<Worker | null>(null);
 
   const selectedForce = useMemo(
@@ -112,6 +126,7 @@ export default function App() {
         }
 
         setJobStatus(payload);
+        setWorkerWarnings(payload.warnings ?? []);
 
         if (payload.status === "succeeded") {
           setOutcomes(payload.outcomes ?? []);
@@ -156,6 +171,13 @@ export default function App() {
     parseGlbFromBase64(selected.optimizedModel.dataBase64)
       .then((scene) => {
         if (active) {
+          if (model) {
+            scene.position.set(
+              model.solveToDisplayOffset[0],
+              model.solveToDisplayOffset[1],
+              model.solveToDisplayOffset[2]
+            );
+          }
           setSelectedOutcomeObject(scene);
         }
       })
@@ -168,12 +190,13 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [outcomes, selectedOutcomeId]);
+  }, [model, outcomes, selectedOutcomeId]);
 
   const preservedCount = useMemo(() => getPreservedFaceIndices(faceLabels).length, [faceLabels]);
 
   const onUploadFile = async (file: File) => {
     setError(null);
+    setWorkerWarnings([]);
     const parsed = await parseModelFile(file);
     const faceCount = parsed.geometry.attributes.position.count / 3;
 
@@ -254,6 +277,7 @@ export default function App() {
     setOutcomes([]);
     setSelectedOutcomeId(null);
     setSelectedOutcomeObject(null);
+    setWorkerWarnings([]);
     setIsSubmittingStudy(true);
 
     try {
@@ -273,57 +297,101 @@ export default function App() {
         const worker = new Worker(new URL("./workers/solverWorker.ts", import.meta.url), { type: "module" });
         workerRef.current = worker;
 
+        const solvePositionsAttr = model.solveGeometry.getAttribute("position");
+        if (!(solvePositionsAttr instanceof THREE.BufferAttribute) || solvePositionsAttr.itemSize !== 3) {
+          throw new Error("Loaded model has invalid solve geometry");
+        }
+
+        const transferablePositions = new Float32Array(solvePositionsAttr.array as Float32Array);
+        setWorkerWarnings([]);
+
         setJobStatus({
           jobId: "browser-local",
           status: "queued",
           stage: "queued",
-          progress: 0
+          progress: 0,
+          qualityProfile,
+          warnings: []
         });
 
-        const localOutcomes = await new Promise<Outcome[]>((resolve, reject) => {
-          const cleanup = () => {
-            worker.terminate();
-            if (workerRef.current === worker) {
-              workerRef.current = null;
-            }
-          };
+        const localResult = await new Promise<{ outcomes: Outcome[]; qualityProfile: BrowserQualityProfile; warnings: string[] }>(
+          (resolve, reject) => {
+            const cleanup = () => {
+              worker.terminate();
+              if (workerRef.current === worker) {
+                workerRef.current = null;
+              }
+            };
 
-          worker.onmessage = (event: MessageEvent<BrowserWorkerMessage>) => {
-            const msg = event.data;
-            if (!msg) {
-              return;
-            }
+            worker.onmessage = (event: MessageEvent<BrowserWorkerMessage>) => {
+              const msg = event.data;
+              if (!msg) {
+                return;
+              }
 
-            if (msg.type === "progress") {
-              setJobStatus({
-                jobId: "browser-local",
-                status: msg.status,
-                stage: msg.stage,
-                progress: msg.progress
-              });
-              return;
-            }
+              if (msg.type === "progress") {
+                setJobStatus({
+                  jobId: "browser-local",
+                  status: msg.status,
+                  stage: msg.stage,
+                  progress: msg.progress,
+                  qualityProfile: msg.qualityProfile,
+                  warnings: msg.warnings,
+                  etaSeconds: msg.etaSeconds
+                });
+                setWorkerWarnings(msg.warnings);
+                return;
+              }
 
-            if (msg.type === "result") {
+              if (msg.type === "result") {
+                cleanup();
+                resolve({
+                  outcomes: msg.outcomes,
+                  qualityProfile: msg.qualityProfile,
+                  warnings: msg.warnings
+                });
+                return;
+              }
+
               cleanup();
-              resolve(msg.outcomes);
-              return;
-            }
+              reject(new Error(msg.error || "Browser solver failed"));
+            };
 
-            cleanup();
-            reject(new Error(msg.error || "Browser solver failed"));
-          };
+            worker.onerror = (event) => {
+              cleanup();
+              reject(new Error(event.message || "Browser worker crashed"));
+            };
 
-          worker.onerror = (event) => {
-            cleanup();
-            reject(new Error(event.message || "Browser worker crashed"));
-          };
+            worker.postMessage(
+              {
+                type: "solve",
+                payload: {
+                  request: payload,
+                  geometry: { positions: transferablePositions },
+                  qualityProfile
+                }
+              },
+              [transferablePositions.buffer]
+            );
+          }
+        );
 
-          worker.postMessage({ type: "solve", payload });
-        });
-
-        setOutcomes(localOutcomes);
-        setSelectedOutcomeId(localOutcomes[0]?.id ?? null);
+        setOutcomes(localResult.outcomes);
+        setSelectedOutcomeId(localResult.outcomes[0]?.id ?? null);
+        setWorkerWarnings(localResult.warnings);
+        setJobStatus((current) =>
+          current
+            ? {
+                ...current,
+                status: "succeeded",
+                stage: "complete",
+                progress: 1,
+                qualityProfile: localResult.qualityProfile,
+                warnings: localResult.warnings,
+                etaSeconds: 0
+              }
+            : current
+        );
         setJobId(null);
         return;
       }
@@ -353,7 +421,8 @@ export default function App() {
         jobId: accepted.jobId,
         status: "queued",
         stage: "queued",
-        progress: 0
+        progress: 0,
+        warnings: []
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown network error";
@@ -605,6 +674,19 @@ export default function App() {
               onChange={(event) => setSettings((curr) => ({ ...curr, outcomeCount: Number(event.target.value) }))}
             />
           </label>
+          {isBrowserSolver && (
+            <label>
+              Browser Quality
+              <select
+                value={qualityProfile}
+                onChange={(event) => setQualityProfile(event.target.value as BrowserQualityProfile)}
+              >
+                <option value="high-fidelity">High Fidelity</option>
+                <option value="balanced">Balanced</option>
+                <option value="fast-preview">Fast Preview</option>
+              </select>
+            </label>
+          )}
           <button
             type="button"
             className="run-button"
@@ -619,6 +701,19 @@ export default function App() {
           <p className="small-note run-hint">
             Solver mode: {isBrowserSolver ? "Browser (local compute)" : "API (remote compute)"}
           </p>
+          {jobStatus?.qualityProfile && (
+            <p className="small-note run-hint">Active quality: {jobStatus.qualityProfile}</p>
+          )}
+          {jobStatus?.etaSeconds != null && jobStatus.status === "running" && (
+            <p className="small-note run-hint">ETA: ~{Math.max(0, jobStatus.etaSeconds)}s</p>
+          )}
+          {workerWarnings.length > 0 && (
+            <div className="panel-warning">
+              {workerWarnings.map((warning, idx) => (
+                <p key={`${idx}-${warning}`}>{warning}</p>
+              ))}
+            </div>
+          )}
           {error && <p className="panel-error">{error}</p>}
         </section>
       </aside>

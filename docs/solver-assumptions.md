@@ -5,11 +5,13 @@
 - The solver computes a directional load-influence scalar field over a voxelized design domain.
 - Material is retained where force influence, preserved-interface proximity, and boundary-support terms are high.
 - Variants are created by sweeping threshold and smoothing/rib-emphasis parameters.
+- Browser mode uses a modular worker pipeline (`geometry` -> `voxel` -> `fields` -> `optimize` -> `mesh` -> `export`) with deterministic parameter sweeps.
 
 ## How this maps to Autodesk-like outcomes
 
 - Preserved geometry is treated as immutable and exported unmodified as a separate node in each GLB.
 - Generated geometry uses marching cubes + Taubin smoothing to avoid jagged voxel artifacts.
+- Generated geometry uses marching-tetrahedra extraction + Taubin smoothing to avoid jagged voxel artifacts.
 - Internal cutouts are carved from low-influence interior voxels while enforcing a minimum wall thickness band.
 
 ## What this does not do (yet)

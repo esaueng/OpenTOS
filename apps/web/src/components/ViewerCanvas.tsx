@@ -308,7 +308,7 @@ function EditablePart({
         roughness={0.45}
         vertexColors
         transparent
-        opacity={0.9}
+        opacity={0.78}
       />
     </mesh>
   );
@@ -361,11 +361,28 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
   useEffect(() => {
     cloned.traverse((node) => {
       if (node instanceof THREE.Mesh && node.material) {
-        const material = Array.isArray(node.material) ? node.material[0] : node.material;
+        const source = Array.isArray(node.material) ? node.material[0] : node.material;
+        const material = source.clone();
         material.wireframe = wireframe;
-        material.transparent = true;
-        material.opacity = 0.85;
+
+        if (node.name === "preserved") {
+          material.color = new THREE.Color("#35d07f");
+          material.transparent = true;
+          material.opacity = 0.28;
+          material.metalness = 0.16;
+          material.roughness = 0.62;
+        } else {
+          material.color = new THREE.Color("#2f353d");
+          material.transparent = true;
+          material.opacity = 0.95;
+          material.metalness = 0.86;
+          material.roughness = 0.2;
+          material.emissive = new THREE.Color("#0f141b");
+          material.emissiveIntensity = 0.2;
+        }
+
         material.needsUpdate = true;
+        node.material = material;
       }
     });
   }, [cloned, wireframe]);

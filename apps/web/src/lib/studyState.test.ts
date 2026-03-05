@@ -1,4 +1,5 @@
 import { applyFaceLabels, buildSolvePayload, initializeFaceLabels, normalizeDirection } from "./studyState";
+import { describe, expect, it } from "vitest";
 
 describe("study state helpers", () => {
   it("applies brush labels and keeps existing labels", () => {
@@ -22,7 +23,9 @@ describe("study state helpers", () => {
         fileName: "part.obj",
         format: "obj",
         dataBase64: "AAAA",
-        geometry: {} as never
+        geometry: {} as never,
+        solveGeometry: {} as never,
+        solveToDisplayOffset: [0.5, 0, -1]
       },
       units: "mm",
       faceLabels: ["design", "preserved", "design"],
@@ -45,5 +48,6 @@ describe("study state helpers", () => {
 
     expect(payload.preservedRegions[0].faceIndices).toEqual([1]);
     expect(payload.forces[0].direction[2]).toBeCloseTo(-1);
+    expect(payload.forces[0].point).toEqual([-0.5, 0, 1]);
   });
 });

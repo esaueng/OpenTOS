@@ -38,6 +38,17 @@ export function getPreservedFaceIndices(labels: RegionLabel[]): number[] {
   return preserved;
 }
 
+export function mapDisplayPointToSolve(
+  point: [number, number, number],
+  solveToDisplayOffset: [number, number, number]
+): [number, number, number] {
+  return [
+    point[0] - solveToDisplayOffset[0],
+    point[1] - solveToDisplayOffset[1],
+    point[2] - solveToDisplayOffset[2]
+  ];
+}
+
 export function buildSolvePayload(args: BuildSolvePayloadArgs): SolvePayload {
   const preserved = getPreservedFaceIndices(args.faceLabels);
   return {
@@ -53,7 +64,7 @@ export function buildSolvePayload(args: BuildSolvePayloadArgs): SolvePayload {
       }
     ],
     forces: args.forces.map((force) => ({
-      point: force.point,
+      point: mapDisplayPointToSolve(force.point, args.model.solveToDisplayOffset),
       direction: normalizeDirection(force.direction),
       magnitude: force.magnitude,
       unit: force.unit,
