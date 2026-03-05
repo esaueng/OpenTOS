@@ -23,7 +23,7 @@ export async function exportOutcomeGlb(
       metalness: 0.18,
       roughness: 0.58,
       transparent: true,
-      opacity: 0.42
+      opacity: 0.36
     })
   );
   preserved.name = "preserved";
@@ -32,10 +32,10 @@ export async function exportOutcomeGlb(
     generatedGeometry,
     new THREE.MeshStandardMaterial({
       color: 0x2f353d,
-      metalness: 0.86,
-      roughness: 0.21,
-      emissive: 0x101418,
-      emissiveIntensity: 0.16
+      metalness: 0.55,
+      roughness: 0.38,
+      emissive: 0x0a1017,
+      emissiveIntensity: 0.06
     })
   );
   generated.name = "generated";

@@ -108,6 +108,7 @@ describe("solver core", () => {
       grid,
       domainMask,
       preserveMask,
+      anchorMask: preserveMask,
       influence,
       targetVolumeFraction: 0.35,
       iterations: 12,

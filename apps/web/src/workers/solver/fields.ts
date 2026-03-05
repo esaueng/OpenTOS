@@ -114,10 +114,11 @@ export function computeBaseInfluenceFields(
   const connectivityRaw = new Float32Array(grid.total);
 
   const diagonal = grid.step * Math.hypot(grid.nx, grid.ny, grid.nz);
-  const sigmaAxial = Math.max(diagonal * 0.35, grid.step * 4);
-  const sigmaRadial = Math.max(diagonal * 0.12, grid.step * 2.25);
-  const connScale = Math.max(diagonal * 0.8, grid.step * 4);
-  const boundaryScale = Math.max(diagonal * 0.16, grid.step * 2);
+  const sigmaAxial = Math.max(diagonal * 0.32, grid.step * 3);
+  const sigmaRadial = Math.max(diagonal * 0.07, grid.step * 1.7);
+  const connScale = Math.max(diagonal * 0.28, grid.step * 2.4);
+  const boundaryScale = Math.max(diagonal * 0.08, grid.step * 1.6);
+  const balanceScale = Math.max(diagonal * 0.24, grid.step * 2);
 
   const normalizedForces = normalizeForces(forces);
 
@@ -153,7 +154,11 @@ export function computeBaseInfluenceFields(
         boundaryRaw[idx] = Math.exp(-dPres / boundaryScale);
 
         const dForce = forceDistance[idx] * grid.step;
-        const connect = Math.exp(-(dForce + dPres) / connScale);
+        const pairDistance = dForce + dPres;
+        const balance = Math.abs(dForce - dPres);
+        const bridge = Math.exp(-pairDistance / connScale);
+        const balancedPath = Math.exp(-balance / balanceScale);
+        const connect = bridge * (0.65 + 0.35 * balancedPath);
         connectivityRaw[idx] = connect;
       }
     }
@@ -183,7 +188,7 @@ export function combineInfluenceFields(
   targetSafetyFactor: number
 ): Float32Array {
   const out = new Float32Array(base.directional.length);
-  const safetyBias = 1 + Math.max(0, targetSafetyFactor - 1) * 0.075;
+  const safetyBias = 1 + Math.max(0, targetSafetyFactor - 1) * 0.07;
 
   for (let i = 0; i < out.length; i += 1) {
     if (!domainMask[i]) {
@@ -200,7 +205,8 @@ export function combineInfluenceFields(
       boundary * variant.boundaryWeight;
 
     const rib = Math.sqrt(Math.max(0, directional * connectivity));
-    out[i] = clamp01((composite + rib * variant.ribBoost) * safetyBias);
+    const bridgeFocus = Math.pow(Math.max(0, connectivity), 1.35) * (0.72 + directional * 0.28);
+    out[i] = clamp01((composite + rib * variant.ribBoost + bridgeFocus * 0.22) * safetyBias);
   }
 
   return out;

@@ -423,16 +423,16 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
           material.color = new THREE.Color("#35d07f");
           material.transparent = false;
           material.opacity = 1;
-          material.metalness = 0.16;
-          material.roughness = 0.62;
+          material.metalness = 0.1;
+          material.roughness = 0.72;
         } else {
           material.color = new THREE.Color("#2f353d");
           material.transparent = false;
           material.opacity = 1;
-          material.metalness = 0.86;
-          material.roughness = 0.2;
+          material.metalness = 0.52;
+          material.roughness = 0.42;
           material.emissive = new THREE.Color("#0f141b");
-          material.emissiveIntensity = 0.2;
+          material.emissiveIntensity = 0.07;
         }
         material.side = THREE.DoubleSide;
 
