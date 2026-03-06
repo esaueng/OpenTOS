@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
-import { Environment, Grid, Html, OrbitControls } from "@react-three/drei";
+import { Environment, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
@@ -361,10 +361,13 @@ function EditablePart({
     >
       <meshStandardMaterial
         color="#8a95ad"
-        metalness={0.25}
-        roughness={0.45}
+        metalness={0.08}
+        roughness={0.7}
         vertexColors
         side={THREE.FrontSide}
+        transparent={false}
+        depthWrite
+        depthTest
       />
     </mesh>
   );
@@ -431,12 +434,14 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
           material.color = new THREE.Color("#2f353d");
           material.transparent = false;
           material.opacity = 1;
-          material.metalness = 0.52;
-          material.roughness = 0.42;
+          material.metalness = 0.18;
+          material.roughness = 0.62;
           material.emissive = new THREE.Color("#0f141b");
-          material.emissiveIntensity = 0.07;
+          material.emissiveIntensity = 0.03;
         }
         material.side = THREE.FrontSide;
+        material.depthWrite = true;
+        material.depthTest = true;
 
         material.needsUpdate = true;
         node.material = material;
@@ -498,7 +503,6 @@ export function ViewerCanvas({
           />
         ))}
         <CameraAutoFit fitRootRef={fitRootRef} controlsRef={controlsRef} fitKey={fitKey} />
-        <Grid args={[4, 4]} infiniteGrid cellColor="#2f3b50" sectionColor="#4f6285" fadeDistance={14} />
         <Environment preset="city" />
         <OrbitControls
           ref={controlsRef}
