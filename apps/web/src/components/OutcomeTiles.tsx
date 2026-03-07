@@ -89,7 +89,18 @@ function formatMetric(value: number): string {
 }
 
 export function OutcomeTiles({ outcomes, selectedOutcomeId, onSelectOutcome }: OutcomeTilesProps) {
-  const sorted = useMemo(() => [...outcomes].sort((a, b) => a.id.localeCompare(b.id)), [outcomes]);
+  const sorted = useMemo(
+    () =>
+      [...outcomes].sort((a, b) => {
+        const aScore = typeof a.variantParams?.rankScore === "number" ? Number(a.variantParams.rankScore) : Number.POSITIVE_INFINITY;
+        const bScore = typeof b.variantParams?.rankScore === "number" ? Number(b.variantParams.rankScore) : Number.POSITIVE_INFINITY;
+        if (aScore !== bScore) {
+          return aScore - bScore;
+        }
+        return a.id.localeCompare(b.id);
+      }),
+    [outcomes]
+  );
 
   return (
     <div className="outcome-grid">

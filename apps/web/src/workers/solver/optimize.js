@@ -138,6 +138,72 @@ function carveInteriorVoids(occupancy, influence, domainMask, preserveMask, grid
     }
     return carved;
 }
+function pruneToVolumeTarget(occupancy, influence, domainMask, preserveMask, anchorMask, grid, targetVolumeFraction, voidBias) {
+    const pruned = occupancy.slice();
+    let designCapacity = 0;
+    let occupied = 0;
+    for (let i = 0; i < pruned.length; i += 1) {
+        if (!domainMask[i] || preserveMask[i]) {
+            continue;
+        }
+        designCapacity += 1;
+        if (pruned[i]) {
+            occupied += 1;
+        }
+    }
+    const targetOccupied = Math.max(1, Math.round(designCapacity * clamp01(targetVolumeFraction)));
+    if (occupied <= targetOccupied) {
+        return pruned;
+    }
+    const passes = Math.max(1, Math.min(4, Math.round(1 + voidBias * 3)));
+    for (let pass = 0; pass < passes && occupied > targetOccupied; pass += 1) {
+        const candidates = [];
+        for (let idx = 0; idx < pruned.length; idx += 1) {
+            if (!pruned[idx] || !domainMask[idx] || preserveMask[idx] || anchorMask[idx]) {
+                continue;
+            }
+            const { x, y, z } = decodeIndex(grid, idx);
+            let occupiedNeighbors = 0;
+            for (const [dx, dy, dz] of NEIGHBORS) {
+                const nx = x + dx;
+                const ny = y + dy;
+                const nz = z + dz;
+                if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+                    continue;
+                }
+                if (pruned[index3D(grid, nx, ny, nz)]) {
+                    occupiedNeighbors += 1;
+                }
+            }
+            if (occupiedNeighbors < 3) {
+                continue;
+            }
+            const neighborSupport = occupiedNeighbors / NEIGHBORS.length;
+            candidates.push({
+                idx,
+                score: influence[idx] * 0.8 + neighborSupport * 0.2
+            });
+        }
+        if (!candidates.length) {
+            break;
+        }
+        candidates.sort((a, b) => a.score - b.score);
+        const overshoot = occupied - targetOccupied;
+        const batch = Math.min(candidates.length, Math.max(1, Math.ceil(overshoot / (passes - pass))));
+        for (let i = 0; i < batch; i += 1) {
+            pruned[candidates[i].idx] = 0;
+        }
+        const reconnected = retainConnectedToAnchors(pruned, domainMask, preserveMask, anchorMask, grid);
+        pruned.set(reconnected);
+        occupied = 0;
+        for (let i = 0; i < pruned.length; i += 1) {
+            if (domainMask[i] && !preserveMask[i] && pruned[i]) {
+                occupied += 1;
+            }
+        }
+    }
+    return pruned;
+}
 function retainConnectedToAnchors(occupancy, domainMask, preserveMask, anchorMask, grid) {
     const kept = new Uint8Array(occupancy.length);
     const visited = new Uint8Array(occupancy.length);
@@ -184,7 +250,7 @@ function retainConnectedToAnchors(occupancy, domainMask, preserveMask, anchorMas
     }
     return kept;
 }
-export function solveDensityField({ grid, domainMask, preserveMask, anchorMask, influence, targetVolumeFraction, iterations, smoothFactor, minThickness }) {
+export function solveDensityField({ grid, domainMask, preserveMask, anchorMask, influence, targetVolumeFraction, iterations, smoothFactor, minThickness, voidBias }) {
     const rho = new Float32Array(influence.length);
     for (let i = 0; i < rho.length; i += 1) {
         if (!domainMask[i]) {
@@ -223,9 +289,10 @@ export function solveDensityField({ grid, domainMask, preserveMask, anchorMask, 
             occupancy[i] = 1;
         }
     }
-    const carveAggressiveness = clamp01((0.38 - targetVolumeFraction) * 3.2);
+    const carveAggressiveness = clamp01((0.38 - targetVolumeFraction) * 3.2 + voidBias * 0.4);
     const carved = carveInteriorVoids(occupancy, influence, domainMask, preserveMask, grid, carveAggressiveness);
-    const anchored = retainConnectedToAnchors(carved, domainMask, preserveMask, anchorMask, grid);
+    const pruned = pruneToVolumeTarget(carved, influence, domainMask, preserveMask, anchorMask, grid, targetVolumeFraction, voidBias);
+    const anchored = retainConnectedToAnchors(pruned, domainMask, preserveMask, anchorMask, grid);
     const thicknessEnforced = enforceThickness(anchored, domainMask, preserveMask, grid, minThickness);
     const finalOccupancy = retainConnectedToAnchors(thicknessEnforced, domainMask, preserveMask, anchorMask, grid);
     const densitySmoothed = smoothDensityField(rho, domainMask, grid, 2);
