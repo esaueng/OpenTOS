@@ -364,7 +364,7 @@ function EditablePart({
         metalness={0.08}
         roughness={0.7}
         vertexColors
-        side={THREE.FrontSide}
+        side={THREE.DoubleSide}
         transparent={false}
         depthWrite
         depthTest
@@ -439,7 +439,7 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
           material.emissive = new THREE.Color("#0f141b");
           material.emissiveIntensity = 0.03;
         }
-        material.side = THREE.FrontSide;
+        material.side = THREE.DoubleSide;
         material.depthWrite = true;
         material.depthTest = true;
 
