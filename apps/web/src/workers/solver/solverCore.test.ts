@@ -47,6 +47,7 @@ describe("solver core", () => {
     const base = computeBaseInfluenceFields(
       grid,
       domainMask,
+      preserveMask,
       preservedDistance,
       forceDistance,
       [
@@ -113,7 +114,8 @@ describe("solver core", () => {
       targetVolumeFraction: 0.35,
       iterations: 12,
       smoothFactor: 0.25,
-      minThickness: 1
+      minThickness: 1,
+      voidBias: 0.25
     });
 
     for (let i = 0; i < preserveMask.length; i += 1) {
@@ -124,5 +126,51 @@ describe("solver core", () => {
 
     expect(solved.volumeFraction).toBeGreaterThan(0.01);
     expect(solved.volumeFraction).toBeLessThan(0.75);
+  });
+
+  it("mass target pruning reduces retained material for aggressive volume goals", () => {
+    const positions = cubePositions(1.2);
+    const grid = buildVoxelGrid(positions, 120_000);
+    const { domainMask } = voxelizeDomain(positions, grid);
+    const preserveMask = rasterizePreservedMask(positions, new Set([0, 1]), grid, grid.step * 0.9);
+    const forceAnchorMask = rasterizePreservedMask(positions, new Set([10, 11]), grid, grid.step * 0.9);
+    const anchorMask = new Uint8Array(grid.total);
+    for (let i = 0; i < anchorMask.length; i += 1) {
+      anchorMask[i] = preserveMask[i] || forceAnchorMask[i] ? 1 : 0;
+    }
+
+    const influence = new Float32Array(grid.total);
+    for (let i = 0; i < influence.length; i += 1) {
+      const x = i % grid.nx;
+      influence[i] = domainMask[i] ? 0.2 + (x / Math.max(1, grid.nx - 1)) * 0.8 : 0;
+    }
+
+    const dense = solveDensityField({
+      grid,
+      domainMask,
+      preserveMask,
+      anchorMask,
+      influence,
+      targetVolumeFraction: 0.55,
+      iterations: 10,
+      smoothFactor: 0.22,
+      minThickness: 1,
+      voidBias: 0.12
+    });
+
+    const light = solveDensityField({
+      grid,
+      domainMask,
+      preserveMask,
+      anchorMask,
+      influence,
+      targetVolumeFraction: 0.18,
+      iterations: 10,
+      smoothFactor: 0.22,
+      minThickness: 1,
+      voidBias: 0.62
+    });
+
+    expect(light.volumeFraction).toBeLessThan(dense.volumeFraction);
   });
 });
