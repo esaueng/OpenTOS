@@ -81,9 +81,11 @@ export interface VariantParams {
   directionWeight: number;
   connectivityWeight: number;
   boundaryWeight: number;
+  medialWeight: number;
   smoothFactor: number;
   minThickness: number;
   ribBoost: number;
+  voidBias: number;
 }
 
 export interface VoxelGrid {

@@ -5,6 +5,58 @@ export interface InfluenceBaseFields {
   directional: Float32Array;
   connectivity: Float32Array;
   boundary: Float32Array;
+  medial: Float32Array;
+}
+
+function centroidFromMask(grid: VoxelGrid, mask: Uint8Array): [number, number, number] {
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let count = 0;
+
+  for (let z = 0; z < grid.nz; z += 1) {
+    for (let y = 0; y < grid.ny; y += 1) {
+      for (let x = 0; x < grid.nx; x += 1) {
+        const idx = index3D(grid, x, y, z);
+        if (!mask[idx]) {
+          continue;
+        }
+        const [cx, cy, cz] = voxelCenter(grid, x, y, z);
+        sx += cx;
+        sy += cy;
+        sz += cz;
+        count += 1;
+      }
+    }
+  }
+
+  if (count === 0) {
+    return [grid.origin[0], grid.origin[1], grid.origin[2]];
+  }
+
+  return [sx / count, sy / count, sz / count];
+}
+
+function distanceToSegmentSquared(
+  point: [number, number, number],
+  start: [number, number, number],
+  end: [number, number, number]
+): number {
+  const sx = end[0] - start[0];
+  const sy = end[1] - start[1];
+  const sz = end[2] - start[2];
+  const px = point[0] - start[0];
+  const py = point[1] - start[1];
+  const pz = point[2] - start[2];
+  const segLen2 = Math.max(1e-9, sx * sx + sy * sy + sz * sz);
+  const t = clamp01((px * sx + py * sy + pz * sz) / segLen2);
+  const qx = start[0] + sx * t;
+  const qy = start[1] + sy * t;
+  const qz = start[2] + sz * t;
+  const dx = point[0] - qx;
+  const dy = point[1] - qy;
+  const dz = point[2] - qz;
+  return dx * dx + dy * dy + dz * dz;
 }
 
 function normalizeField(values: Float32Array, mask: Uint8Array): Float32Array {
@@ -104,6 +156,7 @@ export function normalizeForces(forces: ForceVec[]): ForceVec[] {
 export function computeBaseInfluenceFields(
   grid: VoxelGrid,
   domainMask: Uint8Array,
+  preserveMask: Uint8Array,
   preservedDistance: Float32Array,
   forceDistance: Float32Array,
   forces: ForceVec[],
@@ -112,15 +165,19 @@ export function computeBaseInfluenceFields(
   const directionalRaw = new Float32Array(grid.total);
   const boundaryRaw = new Float32Array(grid.total);
   const connectivityRaw = new Float32Array(grid.total);
+  const medialRaw = new Float32Array(grid.total);
 
   const diagonal = grid.step * Math.hypot(grid.nx, grid.ny, grid.nz);
   const sigmaAxial = Math.max(diagonal * 0.32, grid.step * 3);
   const sigmaRadial = Math.max(diagonal * 0.07, grid.step * 1.7);
+  const sigmaSegment = Math.max(diagonal * 0.055, grid.step * 1.5);
   const connScale = Math.max(diagonal * 0.28, grid.step * 2.4);
   const boundaryScale = Math.max(diagonal * 0.08, grid.step * 1.6);
   const balanceScale = Math.max(diagonal * 0.24, grid.step * 2);
+  const medialScale = Math.max(diagonal * 0.09, grid.step * 1.4);
 
   const normalizedForces = normalizeForces(forces);
+  const preserveCentroid = centroidFromMask(grid, preserveMask);
 
   for (let z = 0; z < grid.nz; z += 1) {
     for (let y = 0; y < grid.ny; y += 1) {
@@ -132,6 +189,7 @@ export function computeBaseInfluenceFields(
 
         const c = voxelCenter(grid, x, y, z);
         let score = 0;
+        let segmentScore = 0;
 
         for (const force of normalizedForces) {
           const dx = c[0] - force.point[0];
@@ -145,7 +203,10 @@ export function computeBaseInfluenceFields(
           const forward = Math.exp(-(along * along) / (2 * sigmaAxial * sigmaAxial));
           const radial = Math.exp(-perp2 / (2 * sigmaRadial * sigmaRadial));
           const directionalBias = along >= 0 ? 1 : 0.72;
-          score += force.magnitudeN * forward * radial * directionalBias;
+          const segmentDist2 = distanceToSegmentSquared(c, force.point, preserveCentroid);
+          const segmentCorridor = Math.exp(-segmentDist2 / (2 * sigmaSegment * sigmaSegment));
+          score += force.magnitudeN * Math.max(forward * radial * directionalBias, segmentCorridor * 0.88);
+          segmentScore += segmentCorridor * Math.sqrt(Math.max(force.magnitudeN, 1));
         }
 
         directionalRaw[idx] = score;
@@ -160,6 +221,7 @@ export function computeBaseInfluenceFields(
         const balancedPath = Math.exp(-balance / balanceScale);
         const connect = bridge * (0.65 + 0.35 * balancedPath);
         connectivityRaw[idx] = connect;
+        medialRaw[idx] = Math.max(connect * Math.exp(-balance / medialScale), segmentScore);
       }
     }
   }
@@ -173,11 +235,13 @@ export function computeBaseInfluenceFields(
     connectivityIterations
   );
   const connectivity = normalizeField(connectivitySmoothed, domainMask);
+  const medial = normalizeField(diffuseField(normalizeField(medialRaw, domainMask), domainMask, grid, Math.max(2, Math.round(connectivityIterations * 0.5))), domainMask);
 
   return {
     directional,
     connectivity,
-    boundary
+    boundary,
+    medial
   };
 }
 
@@ -198,15 +262,18 @@ export function combineInfluenceFields(
     const directional = base.directional[i];
     const connectivity = base.connectivity[i];
     const boundary = base.boundary[i];
+    const medial = base.medial[i];
 
     const composite =
       directional * variant.directionWeight +
       connectivity * variant.connectivityWeight +
-      boundary * variant.boundaryWeight;
+      boundary * variant.boundaryWeight +
+      medial * variant.medialWeight;
 
     const rib = Math.sqrt(Math.max(0, directional * connectivity));
-    const bridgeFocus = Math.pow(Math.max(0, connectivity), 1.35) * (0.72 + directional * 0.28);
-    out[i] = clamp01((composite + rib * variant.ribBoost + bridgeFocus * 0.22) * safetyBias);
+    const bridgeFocus = Math.pow(Math.max(0, connectivity), 1.35) * (0.56 + directional * 0.18 + medial * 0.26);
+    const branchFocus = Math.sqrt(Math.max(0, medial * directional));
+    out[i] = clamp01((composite + rib * variant.ribBoost + bridgeFocus * 0.22 + branchFocus * 0.16) * safetyBias);
   }
 
   return out;
