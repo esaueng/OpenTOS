@@ -10,15 +10,18 @@ export function variantParams(index: number, count: number, minThickness: number
   const t = count <= 1 ? 0 : index / (count - 1);
   const j = hash01(index * 13.17 + jitterSeed * 3.11);
   const k = hash01(index * 7.63 + jitterSeed * 9.41);
+  const m = hash01(index * 5.19 + jitterSeed * 4.73);
 
   return {
-    targetVolumeFraction: 0.11 + (1 - t) * 0.17 + (j - 0.5) * 0.03,
-    directionWeight: 0.5 + (1 - t) * 0.22 + (k - 0.5) * 0.05,
-    connectivityWeight: 0.42 + t * 0.18 + (j - 0.5) * 0.04,
-    boundaryWeight: 0.08 + t * 0.1,
-    smoothFactor: 0.2 + t * 0.14,
+    targetVolumeFraction: 0.09 + (1 - t) * 0.19 + (j - 0.5) * 0.04,
+    directionWeight: 0.46 + (1 - t) * 0.24 + (k - 0.5) * 0.06,
+    connectivityWeight: 0.36 + t * 0.22 + (j - 0.5) * 0.05,
+    boundaryWeight: 0.04 + t * 0.08 + (m - 0.5) * 0.02,
+    medialWeight: 0.16 + (1 - t) * 0.24 + (m - 0.5) * 0.05,
+    smoothFactor: 0.18 + t * 0.16,
     minThickness: Math.max(1, minThickness + Math.round((k - 0.5) * 1.5)),
-    ribBoost: 0.22 + (1 - t) * 0.26 + (j - 0.5) * 0.06
+    ribBoost: 0.18 + (1 - t) * 0.3 + (j - 0.5) * 0.08,
+    voidBias: 0.18 + t * 0.48 + (k - 0.5) * 0.08
   };
 }
 

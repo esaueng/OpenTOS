@@ -20,6 +20,8 @@ class VariantParams:
     rib_weight: float
     carve_bias: float
     anisotropy: float
+    medial_weight: float
+    void_bias: float
 
 
 def _choose_pitch(mesh: trimesh.Trimesh) -> float:
@@ -55,6 +57,63 @@ def _voxel_centers(shape: tuple[int, int, int], transform: np.ndarray) -> np.nda
     return centers.reshape(shape + (3,))
 
 
+def _voxel_mask_from_centers(
+    centers: np.ndarray,
+    transform: np.ndarray,
+    shape: tuple[int, int, int],
+    solid_mask: np.ndarray,
+    dilation: int,
+) -> np.ndarray:
+    mask = np.zeros(shape, dtype=bool)
+    for center in centers:
+        x, y, z = _world_to_index(np.asarray(center, dtype=np.float64), transform, shape)
+        mask[x, y, z] = True
+    if dilation > 0:
+        mask = ndi.binary_dilation(mask, iterations=dilation)
+    return mask & solid_mask
+
+
+def _force_seed_mask(
+    forces: list[Any],
+    transform: np.ndarray,
+    shape: tuple[int, int, int],
+    solid_mask: np.ndarray,
+    pitch: float,
+) -> np.ndarray:
+    mask = np.zeros(shape, dtype=bool)
+    for force in forces:
+        base = np.asarray(force.point_m, dtype=np.float64)
+        direction = np.asarray(force.direction, dtype=np.float64)
+        norm = np.linalg.norm(direction)
+        if norm <= 1e-9:
+            direction = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        else:
+            direction = direction / norm
+
+        radius = int(np.clip(np.sqrt(max(force.magnitude_n, 1.0)) / 40.0, 1, 2))
+        trail_steps = radius + 1
+        for step in range(trail_steps + 1):
+            sample = base - direction * pitch * step
+            x, y, z = _world_to_index(sample, transform, shape)
+            mask[x, y, z] = True
+
+    mask = ndi.binary_dilation(mask, iterations=1)
+    return mask & solid_mask
+
+
+def _rank_outcome(metrics: dict[str, float], target_safety_factor: float, target_mass_reduction_pct: float) -> float:
+    safety_shortfall = max(0.0, target_safety_factor - metrics["safetyIndexProxy"])
+    mass_gap = abs(target_mass_reduction_pct - metrics["massReductionPct"])
+    return (
+        metrics["complianceProxy"] * 0.55
+        + metrics["stressProxy"] * 0.18
+        + metrics["displacementProxy"] * 0.14
+        + safety_shortfall * 28.0
+        + mass_gap * 0.24
+        - min(metrics["massReductionPct"], target_mass_reduction_pct) * 0.08
+    )
+
+
 def _connected_keep(mask: np.ndarray, anchor: np.ndarray) -> np.ndarray:
     labels, n = ndi.label(mask)
     if n == 0:
@@ -71,14 +130,17 @@ def _connected_keep(mask: np.ndarray, anchor: np.ndarray) -> np.ndarray:
 
 def _variant_params(count: int, seed: int) -> list[VariantParams]:
     rng = np.random.default_rng(seed)
-    thresholds = np.linspace(0.36, 0.62, num=max(count * 3, 12))
-    sigmas = np.linspace(0.8, 2.4, num=max(count * 3, 12))
-    rib_weights = np.linspace(0.1, 0.46, num=max(count * 3, 12))
-    carve_biases = np.linspace(0.67, 0.9, num=max(count * 3, 12))
-    anisotropies = np.linspace(0.82, 1.28, num=max(count * 3, 12))
+    span = max(count * 4, 14)
+    thresholds = np.linspace(0.32, 0.64, num=span)
+    sigmas = np.linspace(0.8, 2.4, num=span)
+    rib_weights = np.linspace(0.12, 0.52, num=span)
+    carve_biases = np.linspace(0.58, 0.9, num=span)
+    anisotropies = np.linspace(0.8, 1.35, num=span)
+    medial_weights = np.linspace(0.16, 0.38, num=span)
+    void_biases = np.linspace(0.12, 0.62, num=span)
 
     params: list[VariantParams] = []
-    for i in range(max(count * 3, 12)):
+    for i in range(span):
         jitter = float(rng.uniform(-0.035, 0.035))
         params.append(
             VariantParams(
@@ -87,6 +149,8 @@ def _variant_params(count: int, seed: int) -> list[VariantParams]:
                 rib_weight=float(rib_weights[i]),
                 carve_bias=float(carve_biases[::-1][i]),
                 anisotropy=float(anisotropies[i]),
+                medial_weight=float(medial_weights[::-1][i]),
+                void_bias=float(void_biases[i]),
             )
         )
     return params
@@ -119,13 +183,8 @@ class FusionApproxSolver:
 
         progress("constraint-map", 0.1)
 
-        preserved_occ = np.zeros_like(occ, dtype=bool)
         preserved_centers = mesh.triangles_center[study.preserved_face_indices]
-        for center in preserved_centers:
-            x, y, z = _world_to_index(center, transform, occ.shape)
-            preserved_occ[x, y, z] = True
-        preserved_occ = ndi.binary_dilation(preserved_occ, iterations=2)
-        preserved_occ &= occ
+        preserved_occ = _voxel_mask_from_centers(preserved_centers, transform, occ.shape, occ, dilation=2)
 
         fixed_occ = np.zeros_like(occ, dtype=bool)
         all_forces = []
@@ -134,35 +193,33 @@ class FusionApproxSolver:
             all_forces.extend(load_case.forces)
             total_force_n += sum(force.magnitude_n for force in load_case.forces)
             fixed_centers = mesh.triangles_center[load_case.fixed_face_indices]
-            for center in fixed_centers:
-                x, y, z = _world_to_index(center, transform, occ.shape)
-                fixed_occ[x, y, z] = True
-        fixed_occ = ndi.binary_dilation(fixed_occ, iterations=1)
-        fixed_occ &= occ
+            fixed_occ |= _voxel_mask_from_centers(fixed_centers, transform, occ.shape, occ, dilation=1)
 
         obstacle_occ = np.zeros_like(occ, dtype=bool)
         if study.obstacle_face_indices.size > 0:
             obstacle_centers = mesh.triangles_center[study.obstacle_face_indices]
-            for center in obstacle_centers:
-                x, y, z = _world_to_index(center, transform, occ.shape)
-                obstacle_occ[x, y, z] = True
-            obstacle_occ = ndi.binary_dilation(obstacle_occ, iterations=2)
-            obstacle_occ &= occ
+            obstacle_occ = _voxel_mask_from_centers(obstacle_centers, transform, occ.shape, occ, dilation=2)
+
+        design_occ = np.zeros_like(occ, dtype=bool)
+        if study.design_face_indices.size > 0:
+            if study.design_face_indices.size >= mesh.faces.shape[0] * 0.6:
+                design_occ = occ.copy()
+            else:
+                design_centers = mesh.triangles_center[study.design_face_indices]
+                design_occ = _voxel_mask_from_centers(design_centers, transform, occ.shape, occ, dilation=4)
+                design_occ = ndi.binary_closing(design_occ, iterations=2) & occ
+        if not design_occ.any() or design_occ.sum() < occ.sum() * 0.12:
+            design_occ = occ.copy()
 
         if preserved_occ.sum() == 0:
             raise RuntimeError("Preserved geometry could not be mapped into the design grid")
 
-        force_seed = np.zeros_like(occ, dtype=bool)
-        for force in all_forces:
-            x, y, z = _world_to_index(force.point_m, transform, occ.shape)
-            force_seed[x, y, z] = True
-        force_seed = ndi.binary_dilation(force_seed, iterations=2)
-        force_seed &= occ
+        force_seed = _force_seed_mask(all_forces, transform, occ.shape, occ, pitch)
 
         if force_seed.sum() == 0:
             raise RuntimeError("Force seeds could not be mapped into the design grid")
 
-        design_domain = occ & ~obstacle_occ
+        design_domain = occ & design_occ & ~obstacle_occ
         if design_domain.sum() < 1500:
             raise RuntimeError("Obstacle constraints removed too much domain volume")
 
@@ -174,10 +231,15 @@ class FusionApproxSolver:
 
         max_inside = float(max(inside_dist.max(), 1.0))
         boundary_support = inside_dist / max_inside
-        connect_field = np.exp(-to_force / 8.0) * np.exp(-to_preserved / 9.0)
+        pair_dist = to_force + to_preserved
+        balance_dist = np.abs(to_force - to_preserved)
+        connect_field = np.exp(-pair_dist / 8.6) * (0.58 + 0.42 * np.exp(-balance_dist / 4.8))
 
         centers = _voxel_centers(occ.shape, transform)
         directional = np.zeros_like(connect_field, dtype=np.float32)
+        corridor = np.zeros_like(connect_field, dtype=np.float32)
+        preserve_anchor_points = centers[preserved_occ | fixed_occ]
+        preserve_centroid = preserve_anchor_points.mean(axis=0) if preserve_anchor_points.size else mesh.centroid
         for force in all_forces:
             vectors = centers - force.point_m
             norms = np.linalg.norm(vectors, axis=-1)
@@ -187,10 +249,27 @@ class FusionApproxSolver:
             falloff = np.exp(-safe_norms / (pitch * 26.0))
             directional = np.maximum(directional, alignment * falloff)
 
+            segment = preserve_centroid - force.point_m
+            seg_len2 = max(float(np.dot(segment, segment)), 1e-9)
+            rel = centers - force.point_m
+            t = np.clip(np.sum(rel * segment.reshape(1, 1, 1, 3), axis=-1) / seg_len2, 0.0, 1.0)
+            closest = force.point_m.reshape(1, 1, 1, 3) + t[..., None] * segment.reshape(1, 1, 1, 3)
+            radial = np.linalg.norm(centers - closest, axis=-1)
+            corridor = np.maximum(corridor, np.exp(-(radial**2) / (2.0 * max((pitch * 2.2) ** 2, 1e-9))))
+
         directional = (directional - directional.min()) / (directional.max() - directional.min() + 1e-9)
+        medial = np.exp(-balance_dist / 3.6) * np.exp(-pair_dist / 11.0)
+        medial = (medial - medial.min()) / (medial.max() - medial.min() + 1e-9)
+        corridor = (corridor - corridor.min()) / (corridor.max() - corridor.min() + 1e-9)
 
         safety_weight = np.clip(study.target_safety_factor / 2.0, 0.8, 1.9)
-        influence = 0.52 * connect_field + 0.3 * directional + 0.18 * boundary_support * safety_weight
+        influence = (
+            0.4 * connect_field
+            + 0.22 * directional
+            + 0.14 * boundary_support * safety_weight
+            + 0.16 * medial
+            + 0.18 * corridor
+        )
         influence *= design_domain
         influence = ndi.gaussian_filter(influence.astype(np.float32), sigma=1.15)
 
@@ -220,6 +299,8 @@ class FusionApproxSolver:
         outcomes: list[SolverOutcomeResult] = []
         signatures: list[tuple[float, float, float]] = []
         anchor_mask = preserved_occ | fixed_occ | force_seed
+        design_capacity = max(int((design_domain & ~(preserved_occ | fixed_occ)).sum()), 1)
+        target_keep_fraction = float(np.clip(1.0 - study.target_mass_reduction_pct / 100.0, 0.08, 0.62))
 
         attempt_index = 0
         max_attempts = study.outcome_count * 7
@@ -230,7 +311,8 @@ class FusionApproxSolver:
 
             adaptive_threshold = low_q + p.threshold * field_range
             rib_boost = np.power(boundary_support, p.anisotropy) * p.rib_weight
-            variant_field = influence + rib_boost
+            branch_boost = medial * p.medial_weight + corridor * (0.1 + p.medial_weight * 0.35)
+            variant_field = influence + rib_boost + branch_boost
 
             core = design_domain & (variant_field >= adaptive_threshold)
             core |= anchor_mask
@@ -239,7 +321,8 @@ class FusionApproxSolver:
 
             wall_dist = ndi.distance_transform_edt(core)
             min_wall = np.clip(2.2 / max(pitch * 1000.0, 0.22), 1.0, 5.0)
-            carve = (wall_dist > min_wall) & (variant_field < adaptive_threshold * p.carve_bias)
+            carve_limit = adaptive_threshold * max(0.35, p.carve_bias - p.void_bias * 0.18)
+            carve = (wall_dist > min_wall) & (variant_field < carve_limit)
             core[carve] = False
 
             smoothed = ndi.gaussian_filter(core.astype(np.float32), sigma=p.smoothing_sigma)
@@ -253,6 +336,24 @@ class FusionApproxSolver:
             design_only = candidate & ~(preserved_occ | fixed_occ)
             if design_only.sum() < 500:
                 continue
+
+            desired_ratio = float(np.clip(target_keep_fraction + (p.threshold - 0.5) * 0.18, 0.08, 0.64))
+            target_voxels = max(250, int(design_capacity * desired_ratio))
+            if int(design_only.sum()) > target_voxels:
+                active_values = variant_field[design_only]
+                if active_values.size:
+                    cutoff_q = float(np.clip(1.0 - target_voxels / max(active_values.size, 1), 0.0, 0.96))
+                    cutoff = float(np.quantile(active_values, cutoff_q))
+                    trimmed = candidate.copy()
+                    trimmed[design_only & (variant_field < cutoff)] = False
+                    trimmed |= preserved_occ | fixed_occ
+                    trimmed &= design_domain
+                    trimmed = ndi.binary_closing(trimmed, iterations=1)
+                    trimmed = _connected_keep(trimmed, anchor_mask)
+                    design_only = trimmed & ~(preserved_occ | fixed_occ)
+                    candidate = trimmed
+                    if design_only.sum() < 300:
+                        continue
 
             try:
                 volume_data = ndi.gaussian_filter(design_only.astype(np.float32), sigma=0.84)
@@ -314,27 +415,35 @@ class FusionApproxSolver:
             glb_bytes = scene.export(file_type="glb")
 
             outcome_id = f"OUT-{len(outcomes) + 1:02d}"
+            metrics = {
+                "baselineVolume": float(baseline_volume),
+                "volume": float(volume_display),
+                "mass": float(mass_kg),
+                "massReductionPct": float(mass_reduction_pct),
+                "stressProxy": float(stress_proxy_mpa),
+                "displacementProxy": float(displacement_proxy_mm),
+                "safetyIndexProxy": float(safety_index_proxy),
+                "complianceProxy": float(compliance_proxy),
+            }
             outcomes.append(
                 SolverOutcomeResult(
                     id=outcome_id,
                     glb_bytes=glb_bytes,
-                    metrics={
-                        "baselineVolume": float(baseline_volume),
-                        "volume": float(volume_display),
-                        "mass": float(mass_kg),
-                        "massReductionPct": float(mass_reduction_pct),
-                        "stressProxy": float(stress_proxy_mpa),
-                        "displacementProxy": float(displacement_proxy_mm),
-                        "safetyIndexProxy": float(safety_index_proxy),
-                        "complianceProxy": float(compliance_proxy),
-                    },
+                    metrics=metrics,
                     params={
                         "threshold": p.threshold,
                         "smoothingSigma": p.smoothing_sigma,
                         "ribWeight": p.rib_weight,
                         "carveBias": p.carve_bias,
                         "anisotropy": p.anisotropy,
+                        "medialWeight": p.medial_weight,
+                        "voidBias": p.void_bias,
                         "pitch": pitch,
+                        "rankScore": _rank_outcome(
+                            metrics,
+                            study.target_safety_factor,
+                            study.target_mass_reduction_pct,
+                        ),
                     },
                 )
             )
@@ -347,6 +456,21 @@ class FusionApproxSolver:
         if len(outcomes) < study.outcome_count:
             for idx in range(len(outcomes)):
                 outcomes[idx].params["uniquenessFallback"] = True
+
+        outcomes.sort(
+            key=lambda outcome: _rank_outcome(
+                outcome.metrics,
+                study.target_safety_factor,
+                study.target_mass_reduction_pct,
+            )
+        )
+        for idx, outcome in enumerate(outcomes, start=1):
+            outcome.id = f"OUT-{idx:02d}"
+            outcome.params["rankScore"] = _rank_outcome(
+                outcome.metrics,
+                study.target_safety_factor,
+                study.target_mass_reduction_pct,
+            )
 
         progress("reconstruct", 0.9)
         progress("rank-export", 0.96)

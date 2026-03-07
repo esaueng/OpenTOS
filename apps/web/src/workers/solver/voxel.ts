@@ -366,25 +366,13 @@ export function distanceFromMask(mask: Uint8Array, domainMask: Uint8Array, grid:
 }
 
 export function forceSeedMask(
-  forces: { point: [number, number, number] }[],
+  forces: { point: [number, number, number]; direction?: [number, number, number]; magnitudeN?: number }[],
   domainMask: Uint8Array,
   grid: VoxelGrid
 ): Uint8Array {
   const mask = new Uint8Array(grid.total);
-  for (const force of forces) {
-    const x = clamp(Math.floor((force.point[0] - grid.origin[0]) / grid.step), 0, grid.nx - 1);
-    const y = clamp(Math.floor((force.point[1] - grid.origin[1]) / grid.step), 0, grid.ny - 1);
-    const z = clamp(Math.floor((force.point[2] - grid.origin[2]) / grid.step), 0, grid.nz - 1);
-    const idx = index3D(grid, x, y, z);
-    if (domainMask[idx]) {
-      mask[idx] = 1;
-      continue;
-    }
-
-    // Snap to nearest domain voxel by local search.
-    let best = -1;
-    let bestDist2 = Number.POSITIVE_INFINITY;
-    const radius = 4;
+  const stampSeed = (idx: number, radius: number): void => {
+    const { x, y, z } = decodeIndex(grid, idx);
     for (let dz = -radius; dz <= radius; dz += 1) {
       for (let dy = -radius; dy <= radius; dy += 1) {
         for (let dx = -radius; dx <= radius; dx += 1) {
@@ -395,24 +383,78 @@ export function forceSeedMask(
             continue;
           }
           const nIdx = index3D(grid, nx, ny, nz);
-          if (!domainMask[nIdx]) {
-            continue;
-          }
-          const c = voxelCenter(grid, nx, ny, nz);
-          const cx = c[0] - force.point[0];
-          const cy = c[1] - force.point[1];
-          const cz = c[2] - force.point[2];
-          const d2 = cx * cx + cy * cy + cz * cz;
-          if (d2 < bestDist2) {
-            bestDist2 = d2;
-            best = nIdx;
+          if (domainMask[nIdx]) {
+            mask[nIdx] = 1;
           }
         }
       }
     }
+  };
 
-    if (best >= 0) {
-      mask[best] = 1;
+  for (const force of forces) {
+    const x = clamp(Math.floor((force.point[0] - grid.origin[0]) / grid.step), 0, grid.nx - 1);
+    const y = clamp(Math.floor((force.point[1] - grid.origin[1]) / grid.step), 0, grid.ny - 1);
+    const z = clamp(Math.floor((force.point[2] - grid.origin[2]) / grid.step), 0, grid.nz - 1);
+    const idx = index3D(grid, x, y, z);
+    const baseRadius = Math.max(1, Math.min(2, Math.round(Math.sqrt(Math.max(force.magnitudeN ?? 1, 1)) / 40)));
+    if (domainMask[idx]) {
+      stampSeed(idx, baseRadius);
+    } else {
+      // Snap to nearest domain voxel by local search.
+      let best = -1;
+      let bestDist2 = Number.POSITIVE_INFINITY;
+      const radius = 4;
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        for (let dy = -radius; dy <= radius; dy += 1) {
+          for (let dx = -radius; dx <= radius; dx += 1) {
+            const nx = x + dx;
+            const ny = y + dy;
+            const nz = z + dz;
+            if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+              continue;
+            }
+            const nIdx = index3D(grid, nx, ny, nz);
+            if (!domainMask[nIdx]) {
+              continue;
+            }
+            const c = voxelCenter(grid, nx, ny, nz);
+            const cx = c[0] - force.point[0];
+            const cy = c[1] - force.point[1];
+            const cz = c[2] - force.point[2];
+            const d2 = cx * cx + cy * cy + cz * cz;
+            if (d2 < bestDist2) {
+              bestDist2 = d2;
+              best = nIdx;
+            }
+          }
+        }
+      }
+
+      if (best >= 0) {
+        stampSeed(best, baseRadius);
+      }
+    }
+
+    if (force.direction) {
+      const length = Math.hypot(force.direction[0], force.direction[1], force.direction[2]);
+      if (length > 1e-9) {
+        const direction = [force.direction[0] / length, force.direction[1] / length, force.direction[2] / length] as const;
+        const steps = Math.max(1, baseRadius + 1);
+        for (let stepIndex = 1; stepIndex <= steps; stepIndex += 1) {
+          const samplePoint: [number, number, number] = [
+            force.point[0] - direction[0] * grid.step * stepIndex,
+            force.point[1] - direction[1] * grid.step * stepIndex,
+            force.point[2] - direction[2] * grid.step * stepIndex
+          ];
+          const sx = clamp(Math.floor((samplePoint[0] - grid.origin[0]) / grid.step), 0, grid.nx - 1);
+          const sy = clamp(Math.floor((samplePoint[1] - grid.origin[1]) / grid.step), 0, grid.ny - 1);
+          const sz = clamp(Math.floor((samplePoint[2] - grid.origin[2]) / grid.step), 0, grid.nz - 1);
+          const sIdx = index3D(grid, sx, sy, sz);
+          if (domainMask[sIdx]) {
+            stampSeed(sIdx, Math.max(1, baseRadius - 1));
+          }
+        }
+      }
     }
   }
   return mask;

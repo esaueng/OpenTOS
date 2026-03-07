@@ -68,6 +68,16 @@ function baselineVolumeFromPositions(positions) {
     g.dispose();
     return volume;
 }
+function outcomeRankScore(outcome, targetSafetyFactor, targetMassReductionPct) {
+    const safetyShortfall = Math.max(0, targetSafetyFactor - outcome.metrics.safetyIndexProxy);
+    const massGap = Math.abs(targetMassReductionPct - outcome.metrics.massReductionPct);
+    return (outcome.metrics.complianceProxy * 0.55 +
+        outcome.metrics.stressProxy * 0.18 +
+        outcome.metrics.displacementProxy * 0.14 +
+        safetyShortfall * 28 +
+        massGap * 0.24 -
+        Math.min(outcome.metrics.massReductionPct, targetMassReductionPct) * 0.08);
+}
 async function solveInWorker(payload) {
     const request = payload.request;
     const warnings = [];
@@ -163,7 +173,7 @@ async function solveInWorker(payload) {
         qualityProfile: qualityConfig.id,
         warnings
     });
-    const baseFields = computeBaseInfluenceFields(grid, constrainedDomain, preservedDistance, forceDistance, forces, qualityConfig.connectivityIterations);
+    const baseFields = computeBaseInfluenceFields(grid, constrainedDomain, preserveMask, preservedDistance, forceDistance, forces, qualityConfig.connectivityIterations);
     const outcomes = [];
     const acceptedVariants = [];
     const targetUnique = Math.max(1, request.targets.outcomeCount - 1);
@@ -185,7 +195,8 @@ async function solveInWorker(payload) {
             targetVolumeFraction: clamp01(params.targetVolumeFraction),
             iterations: qualityConfig.densityIterations,
             smoothFactor: params.smoothFactor,
-            minThickness: params.minThickness
+            minThickness: params.minThickness,
+            voidBias: params.voidBias
         });
         const signature = computeSignature(densityResult.occupancy, constrainedDomain);
         const unique = isUniqueVariant(densityResult.occupancy, signature, acceptedVariants, constrainedDomain);
@@ -226,7 +237,9 @@ async function solveInWorker(payload) {
                 targetVolumeFraction: Number(params.targetVolumeFraction.toFixed(4)),
                 smoothFactor: Number(params.smoothFactor.toFixed(4)),
                 minThickness: params.minThickness,
-                ribBoost: Number(params.ribBoost.toFixed(4))
+                ribBoost: Number(params.ribBoost.toFixed(4)),
+                medialWeight: Number(params.medialWeight.toFixed(4)),
+                voidBias: Number(params.voidBias.toFixed(4))
             }
         });
         acceptedVariants.push({
@@ -253,6 +266,15 @@ async function solveInWorker(payload) {
     }
     if (outcomes.length < request.targets.outcomeCount) {
         warnings.push(`Requested ${request.targets.outcomeCount} outcomes but only ${outcomes.length} were synthesized within runtime limits.`);
+    }
+    outcomes.sort((a, b) => outcomeRankScore(a, request.targets.safetyFactor, request.targets.massReductionGoalPct) -
+        outcomeRankScore(b, request.targets.safetyFactor, request.targets.massReductionGoalPct));
+    for (let i = 0; i < outcomes.length; i += 1) {
+        outcomes[i].id = `OUT-${String(i + 1).padStart(2, "0")}`;
+        outcomes[i].variantParams = {
+            ...outcomes[i].variantParams,
+            rankScore: Number(outcomeRankScore(outcomes[i], request.targets.safetyFactor, request.targets.massReductionGoalPct).toFixed(4))
+        };
     }
     postProgress({
         stage: "rank-export",

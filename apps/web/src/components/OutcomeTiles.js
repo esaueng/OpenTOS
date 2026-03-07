@@ -68,7 +68,14 @@ function formatMetric(value) {
     return value.toFixed(3);
 }
 export function OutcomeTiles({ outcomes, selectedOutcomeId, onSelectOutcome }) {
-    const sorted = useMemo(() => [...outcomes].sort((a, b) => a.id.localeCompare(b.id)), [outcomes]);
+    const sorted = useMemo(() => [...outcomes].sort((a, b) => {
+        const aScore = typeof a.variantParams?.rankScore === "number" ? Number(a.variantParams.rankScore) : Number.POSITIVE_INFINITY;
+        const bScore = typeof b.variantParams?.rankScore === "number" ? Number(b.variantParams.rankScore) : Number.POSITIVE_INFINITY;
+        if (aScore !== bScore) {
+            return aScore - bScore;
+        }
+        return a.id.localeCompare(b.id);
+    }), [outcomes]);
     return (_jsx("div", { className: "outcome-grid", children: sorted.map((outcome) => {
             const selected = selectedOutcomeId === outcome.id;
             return (_jsxs("button", { className: `outcome-tile ${selected ? "is-selected" : ""}`, onClick: () => onSelectOutcome(outcome.id), type: "button", children: [_jsxs("div", { className: "tile-header", children: [_jsx("strong", { children: outcome.id }), _jsx("span", { children: selected ? "Focused" : "Select" })] }), _jsx(Thumbnail, { base64: outcome.optimizedModel.dataBase64 }), _jsxs("div", { className: "tile-metrics", children: [_jsxs("span", { children: ["Volume: ", formatMetric(outcome.metrics.volume)] }), _jsxs("span", { children: ["Mass: ", formatMetric(outcome.metrics.mass)] }), _jsxs("span", { children: ["Mass \u0394: ", formatMetric(outcome.metrics.massReductionPct), "%"] }), _jsxs("span", { children: ["Stress: ", formatMetric(outcome.metrics.stressProxy)] }), _jsxs("span", { children: ["Disp: ", formatMetric(outcome.metrics.displacementProxy)] }), _jsxs("span", { children: ["Safety: ", formatMetric(outcome.metrics.safetyIndexProxy)] })] })] }, outcome.id));
