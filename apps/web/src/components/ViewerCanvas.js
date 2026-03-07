@@ -245,7 +245,7 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
             if (isPainting) {
                 paint(event);
             }
-        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onClick: placeForce, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.FrontSide, transparent: false, depthWrite: true, depthTest: true }) }));
+        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onClick: placeForce, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
 }
 function ForceArrow({ force, selected, onSelect }) {
     const length = Math.min(Math.max(force.magnitude * 0.01, 0.08), 0.35);
@@ -284,7 +284,7 @@ function OutcomeOverlay({ object, wireframe }) {
                     material.emissive = new THREE.Color("#0f141b");
                     material.emissiveIntensity = 0.03;
                 }
-                material.side = THREE.FrontSide;
+                material.side = THREE.DoubleSide;
                 material.depthWrite = true;
                 material.depthTest = true;
                 material.needsUpdate = true;
