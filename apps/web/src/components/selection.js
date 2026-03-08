@@ -424,21 +424,24 @@ export function resolvePreservedSurfaceSelectionFromCandidates(candidateFaceIndi
     if (primaryBaseSurface.length === 0) {
         return primaryBaseSurface;
     }
-    const primaryShape = isMostlyPlanarSurface(topology, primaryBaseSurface);
-    if (!primaryShape.mostlyPlanar) {
-        return primaryBaseSurface;
-    }
+    let curvedFallback = null;
     for (const candidateFace of orderedCandidates) {
         const baseSurface = selectContiguousSurface(candidateFace, topology);
         if (baseSurface.length === 0) {
             continue;
         }
-        const redirectedSurface = redirectHoleSurfaceSelection(candidateFace, baseSurface, topology, ray);
-        if (redirectedSurface && redirectedSurface.length > 0) {
-            return redirectedSurface;
+        const candidateShape = isMostlyPlanarSurface(topology, baseSurface);
+        if (candidateShape.mostlyPlanar) {
+            const redirectedSurface = redirectHoleSurfaceSelection(candidateFace, baseSurface, topology, ray);
+            if (redirectedSurface && redirectedSurface.length > 0) {
+                return redirectedSurface;
+            }
+        }
+        else if (!curvedFallback || baseSurface.length > curvedFallback.length) {
+            curvedFallback = baseSurface;
         }
     }
-    return primaryBaseSurface;
+    return curvedFallback ?? primaryBaseSurface;
 }
 export function resolvePreservedSurfaceSelection(startFaceIndex, topology, ray) {
     return resolvePreservedSurfaceSelectionFromCandidates([startFaceIndex], topology, ray);

@@ -356,16 +356,6 @@ function EditablePart({
       geometry={editableGeometry}
       onPointerDown={(event) => {
         if (!placeForceMode && paintLabel) {
-          if (paintLabel === "preserved") {
-            if (event.button !== 0) {
-              return;
-            }
-            event.stopPropagation();
-            event.nativeEvent.preventDefault();
-            applyPreservedSelection(event, "preserved");
-            return;
-          }
-
           if (event.button !== 0) {
             return;
           }
@@ -380,7 +370,17 @@ function EditablePart({
       }}
       onPointerUp={() => setIsPainting(false)}
       onPointerLeave={() => setIsPainting(false)}
-      onClick={placeForce}
+      onClick={(event) => {
+        if (placeForceMode) {
+          placeForce(event);
+          return;
+        }
+        if (paintLabel === "preserved" && event.button === 0) {
+          event.stopPropagation();
+          event.nativeEvent.preventDefault();
+          applyPreservedSelection(event, "preserved");
+        }
+      }}
       castShadow
       receiveShadow
     >
@@ -541,17 +541,23 @@ export function ViewerCanvas({
           zoomSpeed={1}
           panSpeed={0.9}
           mouseButtons={
-            isEditing
+            placeForceMode || paintLabel === "preserved"
               ? {
-                  LEFT: DISABLED_MOUSE_BUTTON,
+                  LEFT: THREE.MOUSE.ROTATE,
                   MIDDLE: THREE.MOUSE.DOLLY,
                   RIGHT: paintLabel === "preserved" ? DISABLED_MOUSE_BUTTON : THREE.MOUSE.PAN
                 }
-              : {
-                  LEFT: THREE.MOUSE.ROTATE,
-                  MIDDLE: THREE.MOUSE.DOLLY,
-                  RIGHT: THREE.MOUSE.PAN
-                }
+              : isEditing
+                ? {
+                    LEFT: DISABLED_MOUSE_BUTTON,
+                    MIDDLE: THREE.MOUSE.DOLLY,
+                    RIGHT: THREE.MOUSE.PAN
+                  }
+                : {
+                    LEFT: THREE.MOUSE.ROTATE,
+                    MIDDLE: THREE.MOUSE.DOLLY,
+                    RIGHT: THREE.MOUSE.PAN
+                  }
           }
         />
       </Canvas>
