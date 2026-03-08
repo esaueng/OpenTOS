@@ -1,7 +1,13 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { buildSurfaceTopology, resolvePreservedSurfaceSelection, selectContiguousSurface } from "./selection";
+import {
+  buildSurfaceTopology,
+  resolvePreservedSurfaceSelection,
+  resolvePreservedSurfaceSelectionFromCandidates,
+  selectConnectedLabeledFaces,
+  selectContiguousSurface
+} from "./selection";
 
 function washerGeometry(): THREE.BufferGeometry {
   const shape = new THREE.Shape();
@@ -30,19 +36,21 @@ function averageNormal(topology: ReturnType<typeof buildSurfaceTopology>, faces:
 }
 
 describe("preserved surface selection", () => {
-  it("redirects hole clicks from annulus caps to the inner wall", () => {
-    const geometry = washerGeometry();
-    const topology = buildSurfaceTopology(geometry);
-
-    let annulusFace = -1;
+  function findAnnulusFace(topology: ReturnType<typeof buildSurfaceTopology>): number {
     for (let i = 0; i < topology.faceCenters.length; i += 1) {
       const center = topology.faceCenters[i];
       const radial = Math.hypot(center.x, center.y);
       if (center.z < 0.01 && radial > 0.55 && radial < 0.85 && topology.faceNormals[i].z < -0.98) {
-        annulusFace = i;
-        break;
+        return i;
       }
     }
+    return -1;
+  }
+
+  it("redirects hole clicks from annulus caps to the inner wall", () => {
+    const geometry = washerGeometry();
+    const topology = buildSurfaceTopology(geometry);
+    const annulusFace = findAnnulusFace(topology);
 
     expect(annulusFace).toBeGreaterThanOrEqual(0);
 
@@ -59,5 +67,54 @@ describe("preserved surface selection", () => {
     expect(Math.abs(baseNormal.z)).toBeGreaterThan(0.95);
     expect(Math.abs(redirectedNormal.z)).toBeLessThan(0.35);
     expect(redirectedSurface).not.toEqual(baseSurface);
+  });
+
+  it("uses ordered hit candidates and still resolves the bore wall", () => {
+    const geometry = washerGeometry();
+    const topology = buildSurfaceTopology(geometry);
+    const annulusFace = findAnnulusFace(topology);
+
+    const redirectedSurface = resolvePreservedSurfaceSelectionFromCandidates(
+      [annulusFace, annulusFace + 1, annulusFace + 2],
+      topology,
+      new THREE.Ray(new THREE.Vector3(0.18, 0, 1.5), new THREE.Vector3(0, 0, -1))
+    );
+
+    const redirectedNormal = averageNormal(topology, redirectedSurface);
+    expect(Math.abs(redirectedNormal.z)).toBeLessThan(0.35);
+  });
+
+  it("treats clicks on the hole rim as part of the hole selection", () => {
+    const geometry = washerGeometry();
+    const topology = buildSurfaceTopology(geometry);
+    const annulusFace = findAnnulusFace(topology);
+
+    const redirectedSurface = resolvePreservedSurfaceSelection(
+      annulusFace,
+      topology,
+      new THREE.Ray(new THREE.Vector3(0.45, 0, 1.5), new THREE.Vector3(0, 0, -1))
+    );
+
+    const redirectedNormal = averageNormal(topology, redirectedSurface);
+    expect(Math.abs(redirectedNormal.z)).toBeLessThan(0.35);
+  });
+
+  it("clears the currently preserved connected component under the cursor", () => {
+    const geometry = washerGeometry();
+    const topology = buildSurfaceTopology(geometry);
+    const annulusFace = findAnnulusFace(topology);
+    const redirectedSurface = resolvePreservedSurfaceSelection(
+      annulusFace,
+      topology,
+      new THREE.Ray(new THREE.Vector3(0.2, 0, 1.5), new THREE.Vector3(0, 0, -1))
+    );
+
+    const labels = Array.from({ length: topology.faceCenters.length }, () => "design");
+    for (const faceIndex of redirectedSurface) {
+      labels[faceIndex] = "preserved";
+    }
+
+    const clearedSurface = selectConnectedLabeledFaces(redirectedSurface[0], topology, labels, "preserved");
+    expect(new Set(clearedSurface)).toEqual(new Set(redirectedSurface));
   });
 });
