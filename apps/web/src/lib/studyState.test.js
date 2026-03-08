@@ -36,7 +36,7 @@ describe("study state helpers", () => {
                     label: "10lb"
                 }
             ],
-            material: "Aluminum 6061",
+            material: "PETG",
             targetSafetyFactor: 2,
             outcomeCount: 4,
             massReductionGoalPct: 45

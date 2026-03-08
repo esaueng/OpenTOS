@@ -1,14 +1,9 @@
 import { faceArea } from "./geometry";
+import { MATERIAL_PROPERTIES } from "../../materials";
 const UNIT_TO_METERS = {
     mm: 0.001,
     in: 0.0254,
     m: 1
-};
-const MATERIAL_DENSITY = {
-    "Aluminum 6061": 2700
-};
-const MATERIAL_E = {
-    "Aluminum 6061": 69e9
 };
 export function geometryVolume(geometry) {
     const g = geometry.index ? geometry.toNonIndexed() : geometry;
@@ -53,8 +48,9 @@ export function computeOutcomeMetrics(args) {
     const volume = geometryVolume(args.generatedGeometry) + geometryVolume(args.preservedGeometry);
     const unitScale = UNIT_TO_METERS[args.units] ?? 1;
     const volumeM3 = volume * unitScale * unitScale * unitScale;
-    const density = MATERIAL_DENSITY[args.material] ?? MATERIAL_DENSITY["Aluminum 6061"];
-    const eModulus = MATERIAL_E[args.material] ?? MATERIAL_E["Aluminum 6061"];
+    const materialProps = MATERIAL_PROPERTIES[args.material] ?? MATERIAL_PROPERTIES["Aluminum 6061"];
+    const density = materialProps.densityKgM3;
+    const eModulus = materialProps.elasticModulusGPa * 1e9;
     const mass = volumeM3 * density;
     const totalForce = args.forces.reduce((sum, f) => sum + f.magnitudeN, 0);
     const area = geometrySurfaceArea(args.generatedGeometry);
@@ -65,7 +61,7 @@ export function computeOutcomeMetrics(args) {
         1000;
     const baselineVolume = Math.max(args.baselineVolume, 1e-9);
     const massReductionPct = ((baselineVolume - volume) / baselineVolume) * 100;
-    const yieldStrength = 276;
+    const yieldStrength = materialProps.yieldStrengthMPa;
     const safetyIndexProxy = yieldStrength / Math.max(stressProxy, 1e-6);
     const complianceProxy = displacementProxy * (totalForce / 1000 + 1);
     return {

@@ -26,7 +26,7 @@ export interface ForceState {
 
 export interface StudySettings {
   units: "mm" | "in" | "m";
-  material: "Aluminum 6061";
+  material: StudyCreateRequest["material"];
   targetSafetyFactor: number;
   outcomeCount: number;
   massReductionGoalPct: number;
