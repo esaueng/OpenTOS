@@ -4,6 +4,7 @@ export interface SurfaceTopology {
   faceCenters: THREE.Vector3[];
   faceNormals: THREE.Vector3[];
   adjacency: number[][];
+  faceEdgeKeys: string[][];
   edgeFaces: Map<string, number[]>;
   edgeVertices: Map<string, [string, string]>;
   vertexPositions: Map<string, THREE.Vector3>;
@@ -208,12 +209,63 @@ function computeBoundaryLoops(topology: SurfaceTopology, surfaceFaces: number[])
   return loops;
 }
 
+function collectLoopBoundaryFaces(loop: BoundaryLoop, baseSurfaceSet: Set<number>, topology: SurfaceTopology): number[] {
+  const boundaryFaces = new Set<number>();
+  for (const edgeKey of loop.edgeKeys) {
+    const faces = topology.edgeFaces.get(edgeKey) ?? [];
+    for (const faceIndex of faces) {
+      if (baseSurfaceSet.has(faceIndex)) {
+        boundaryFaces.add(faceIndex);
+      }
+    }
+  }
+  return Array.from(boundaryFaces);
+}
+
+function minSurfaceHops(
+  startFaceIndex: number,
+  targetFaces: number[],
+  allowedFaces: Set<number>,
+  topology: SurfaceTopology
+): number {
+  if (targetFaces.length === 0 || !allowedFaces.has(startFaceIndex)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const targetSet = new Set(targetFaces);
+  if (targetSet.has(startFaceIndex)) {
+    return 0;
+  }
+
+  const visited = new Uint8Array(topology.faceNormals.length);
+  const queue: Array<{ faceIndex: number; hops: number }> = [{ faceIndex: startFaceIndex, hops: 0 }];
+  visited[startFaceIndex] = 1;
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const next of topology.adjacency[current.faceIndex]) {
+      if (visited[next] || !allowedFaces.has(next)) {
+        continue;
+      }
+      const nextHops = current.hops + 1;
+      if (targetSet.has(next)) {
+        return nextHops;
+      }
+      visited[next] = 1;
+      queue.push({ faceIndex: next, hops: nextHops });
+    }
+  }
+
+  return Number.POSITIVE_INFINITY;
+}
+
 export function buildSurfaceTopology(geometry: THREE.BufferGeometry): SurfaceTopology {
   const position = geometry.getAttribute("position");
   const faceCount = position.count / 3;
   const faceCenters: THREE.Vector3[] = [];
   const faceNormals = Array.from({ length: faceCount }, () => new THREE.Vector3(0, 0, 1));
   const adjacency = Array.from({ length: faceCount }, () => [] as number[]);
+  const faceEdgeKeys = Array.from({ length: faceCount }, () => [] as string[]);
   const edgeFaces = new Map<string, number[]>();
   const edgeVertices = new Map<string, [string, string]>();
   const vertexPositions = new Map<string, THREE.Vector3>();
@@ -261,6 +313,7 @@ export function buildSurfaceTopology(geometry: THREE.BufferGeometry): SurfaceTop
 
     for (const [u, v] of edges) {
       const edgeKey = edgeKeyFor(u, v);
+      faceEdgeKeys[faceIndex].push(edgeKey);
       if (!edgeVertices.has(edgeKey)) {
         edgeVertices.set(edgeKey, u < v ? [u, v] : [v, u]);
       }
@@ -291,6 +344,7 @@ export function buildSurfaceTopology(geometry: THREE.BufferGeometry): SurfaceTop
     faceCenters,
     faceNormals,
     adjacency,
+    faceEdgeKeys,
     edgeFaces,
     edgeVertices,
     vertexPositions
@@ -390,24 +444,40 @@ function redirectHoleSurfaceSelection(
   }
 
   const largestArea = Math.max(...loops.map((loop) => loop.areaAbs));
+  const innerLoops = loops.filter((loop) => loop.areaAbs < largestArea * 0.98);
+  if (innerLoops.length === 0) {
+    return null;
+  }
   const { u, v } = buildProjectionBasis(surfaceNormal);
   const planeOrigin = topology.faceCenters[startFaceIndex];
   const delta = planeHit.clone().sub(planeOrigin);
   const projectedPoint: [number, number] = [delta.dot(u), delta.dot(v)];
 
-  const holeLoop = loops
+  const baseSurfaceSet = new Set(baseSurface);
+  let holeLoop = innerLoops
     .filter(
       (loop) =>
-        loop.areaAbs < largestArea * 0.98 &&
         (pointOnPolygonEdge(projectedPoint, loop.points2d, 0.012) || pointInPolygon(projectedPoint, loop.points2d))
     )
     .sort((left, right) => left.areaAbs - right.areaAbs)[0];
 
   if (!holeLoop) {
-    return null;
+    let bestLoop: BoundaryLoop | null = null;
+    let bestHops = Number.POSITIVE_INFINITY;
+    for (const candidateLoop of innerLoops) {
+      const boundaryFaces = collectLoopBoundaryFaces(candidateLoop, baseSurfaceSet, topology);
+      const hops = minSurfaceHops(startFaceIndex, boundaryFaces, baseSurfaceSet, topology);
+      if (hops < bestHops) {
+        bestHops = hops;
+        bestLoop = candidateLoop;
+      }
+    }
+    if (!bestLoop || !Number.isFinite(bestHops) || bestHops > 6) {
+      return null;
+    }
+    holeLoop = bestLoop;
   }
 
-  const baseSurfaceSet = new Set(baseSurface);
   const sidewallSeeds = new Set<number>();
 
   for (const edgeKey of holeLoop.edgeKeys) {
