@@ -75,6 +75,25 @@ describe("preserved surface selection", () => {
         }
         return bestFace;
     }
+    function findCurvedFaceNearPoint(topology, point) {
+        let bestFace = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < topology.faceCenters.length; i += 1) {
+            const center = topology.faceCenters[i];
+            if (Math.abs(topology.faceNormals[i].z) >= 0.98) {
+                continue;
+            }
+            const dx = center.x - point[0];
+            const dy = center.y - point[1];
+            const dz = center.z - point[2];
+            const distance = dx * dx + dy * dy + dz * dz;
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestFace = i;
+            }
+        }
+        return bestFace;
+    }
     it("redirects hole clicks from annulus caps to the inner wall", () => {
         const geometry = washerGeometry();
         const topology = buildSurfaceTopology(geometry);
@@ -124,6 +143,17 @@ describe("preserved surface selection", () => {
         const redirectedSurface = resolvePreservedSurfaceSelection(leftAnnulusFace, topology, new THREE.Ray(new THREE.Vector3(-1.32, 0, 1.5), new THREE.Vector3(0, 0, -1)));
         const xs = redirectedSurface.map((faceIndex) => topology.faceCenters[faceIndex].x);
         expect(xs.length).toBeGreaterThan(0);
+        expect(Math.max(...xs)).toBeLessThan(0);
+    });
+    it("prefers a later hole candidate over an earlier shallow curved strip", () => {
+        const geometry = dumbbellGeometry();
+        const topology = buildSurfaceTopology(geometry);
+        const curvedFace = findCurvedFaceNearPoint(topology, [-0.55, 0.2, 0.12]);
+        const leftAnnulusFace = findCapFaceNearPoint(topology, [-1.32, 0, 0]);
+        expect(curvedFace).toBeGreaterThanOrEqual(0);
+        expect(leftAnnulusFace).toBeGreaterThanOrEqual(0);
+        const redirectedSurface = resolvePreservedSurfaceSelectionFromCandidates([curvedFace, leftAnnulusFace], topology, new THREE.Ray(new THREE.Vector3(-1.32, 0, 1.5), new THREE.Vector3(0, 0, -1)));
+        const xs = redirectedSurface.map((faceIndex) => topology.faceCenters[faceIndex].x);
         expect(Math.max(...xs)).toBeLessThan(0);
     });
 });

@@ -228,15 +228,6 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
     }, [camera, faceCount, faceLabels, gl.domElement, onPaintFaces, paintLabel, placeForceMode, surfaceTopology]);
     return (_jsx("mesh", { ref: meshRef, geometry: editableGeometry, onPointerDown: (event) => {
             if (!placeForceMode && paintLabel) {
-                if (paintLabel === "preserved") {
-                    if (event.button !== 0) {
-                        return;
-                    }
-                    event.stopPropagation();
-                    event.nativeEvent.preventDefault();
-                    applyPreservedSelection(event, "preserved");
-                    return;
-                }
                 if (event.button !== 0) {
                     return;
                 }
@@ -247,7 +238,17 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
             if (isPainting) {
                 paint(event);
             }
-        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onClick: placeForce, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
+        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onClick: (event) => {
+            if (placeForceMode) {
+                placeForce(event);
+                return;
+            }
+            if (paintLabel === "preserved" && event.button === 0) {
+                event.stopPropagation();
+                event.nativeEvent.preventDefault();
+                applyPreservedSelection(event, "preserved");
+            }
+        }, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
 }
 function ForceArrow({ force, selected, onSelect }) {
     const length = Math.min(Math.max(force.magnitude * 0.01, 0.08), 0.35);
@@ -303,15 +304,21 @@ export function ViewerCanvas({ geometry, faceLabels, paintLabel, brushRadius, on
     const renderOriginal = Boolean(geometry) && (showOriginal || isEditing);
     const renderOutcomeOverlay = Boolean(outcomeObject) && showOutcomeOverlay && !isEditing;
     const fitKey = `${geometry?.uuid ?? "no-geometry"}:${renderOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${renderOutcomeOverlay}`;
-    return (_jsx("div", { className: "viewer-shell", children: _jsxs(Canvas, { camera: { fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }, shadows: true, onPointerMissed: () => onSelectForce(null), children: [_jsx("color", { attach: "background", args: ["#081223"] }), _jsx("ambientLight", { intensity: 0.5 }), _jsx("directionalLight", { position: [2, 3, 2], intensity: 1.1, castShadow: true }), _jsxs("group", { ref: fitRootRef, onClick: () => onSelectForce(null), children: [geometry && renderOriginal && (_jsx(EditablePart, { geometry: geometry, faceLabels: faceLabels, paintLabel: paintLabel, brushRadius: brushRadius, onPaintFaces: onPaintFaces, placeForceMode: placeForceMode, onPlaceForce: onPlaceForce })), outcomeObject && renderOutcomeOverlay && (_jsx(OutcomeOverlay, { object: outcomeObject, wireframe: wireframe }))] }), forces.map((force) => (_jsx(ForceArrow, { force: force, selected: force.id === selectedForceId, onSelect: () => onSelectForce(force.id) }, force.id))), _jsx(CameraAutoFit, { fitRootRef: fitRootRef, controlsRef: controlsRef, fitKey: fitKey }), _jsx(Environment, { preset: "city" }), _jsx(OrbitControls, { ref: controlsRef, makeDefault: true, enableDamping: true, minDistance: 1e-5, maxDistance: 1e12, zoomSpeed: 1, panSpeed: 0.9, mouseButtons: isEditing
+    return (_jsx("div", { className: "viewer-shell", children: _jsxs(Canvas, { camera: { fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }, shadows: true, onPointerMissed: () => onSelectForce(null), children: [_jsx("color", { attach: "background", args: ["#081223"] }), _jsx("ambientLight", { intensity: 0.5 }), _jsx("directionalLight", { position: [2, 3, 2], intensity: 1.1, castShadow: true }), _jsxs("group", { ref: fitRootRef, onClick: () => onSelectForce(null), children: [geometry && renderOriginal && (_jsx(EditablePart, { geometry: geometry, faceLabels: faceLabels, paintLabel: paintLabel, brushRadius: brushRadius, onPaintFaces: onPaintFaces, placeForceMode: placeForceMode, onPlaceForce: onPlaceForce })), outcomeObject && renderOutcomeOverlay && (_jsx(OutcomeOverlay, { object: outcomeObject, wireframe: wireframe }))] }), forces.map((force) => (_jsx(ForceArrow, { force: force, selected: force.id === selectedForceId, onSelect: () => onSelectForce(force.id) }, force.id))), _jsx(CameraAutoFit, { fitRootRef: fitRootRef, controlsRef: controlsRef, fitKey: fitKey }), _jsx(Environment, { preset: "city" }), _jsx(OrbitControls, { ref: controlsRef, makeDefault: true, enableDamping: true, minDistance: 1e-5, maxDistance: 1e12, zoomSpeed: 1, panSpeed: 0.9, mouseButtons: placeForceMode || paintLabel === "preserved"
                         ? {
-                            LEFT: DISABLED_MOUSE_BUTTON,
+                            LEFT: THREE.MOUSE.ROTATE,
                             MIDDLE: THREE.MOUSE.DOLLY,
                             RIGHT: paintLabel === "preserved" ? DISABLED_MOUSE_BUTTON : THREE.MOUSE.PAN
                         }
-                        : {
-                            LEFT: THREE.MOUSE.ROTATE,
-                            MIDDLE: THREE.MOUSE.DOLLY,
-                            RIGHT: THREE.MOUSE.PAN
-                        } })] }) }));
+                        : isEditing
+                            ? {
+                                LEFT: DISABLED_MOUSE_BUTTON,
+                                MIDDLE: THREE.MOUSE.DOLLY,
+                                RIGHT: THREE.MOUSE.PAN
+                            }
+                            : {
+                                LEFT: THREE.MOUSE.ROTATE,
+                                MIDDLE: THREE.MOUSE.DOLLY,
+                                RIGHT: THREE.MOUSE.PAN
+                            } })] }) }));
 }
