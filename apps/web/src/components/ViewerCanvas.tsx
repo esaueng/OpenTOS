@@ -10,6 +10,7 @@ import {
 } from "three-mesh-bvh";
 
 import type { ForceState, RegionLabel } from "../types";
+import { buildSurfaceTopology, resolvePreservedSurfaceSelection } from "./selection";
 
 (THREE.Mesh as unknown as { prototype: { raycast: (raycaster: THREE.Raycaster, intersects: THREE.Intersection[]) => void } }).prototype.raycast = acceleratedRaycast;
 (THREE.BufferGeometry as unknown as { prototype: Record<string, unknown> }).prototype.computeBoundsTree = computeBoundsTree;
@@ -28,7 +29,7 @@ interface ViewerCanvasProps {
   faceLabels: RegionLabel[];
   paintLabel: RegionLabel | null;
   brushRadius: number;
-  onPaintFaces: (faceIndices: number[]) => void;
+  onPaintFaces: (faceIndices: number[], label: RegionLabel) => void;
   placeForceMode: boolean;
   onPlaceForce: (point: [number, number, number], normal: [number, number, number]) => void;
   forces: ForceState[];
@@ -45,25 +46,15 @@ interface EditablePartProps {
   faceLabels: RegionLabel[];
   paintLabel: RegionLabel | null;
   brushRadius: number;
-  onPaintFaces: (faceIndices: number[]) => void;
+  onPaintFaces: (faceIndices: number[], label: RegionLabel) => void;
   placeForceMode: boolean;
   onPlaceForce: (point: [number, number, number], normal: [number, number, number]) => void;
 }
-
-type SurfaceGrowData = {
-  faceNormals: THREE.Vector3[];
-  adjacency: number[][];
-};
 
 interface CameraAutoFitProps {
   fitRootRef: React.RefObject<THREE.Group>;
   controlsRef: React.RefObject<OrbitControlsImpl | null>;
   fitKey: string;
-}
-
-function quantizedVertexKey(x: number, y: number, z: number): string {
-  const q = 1e5;
-  return `${Math.round(x * q)}:${Math.round(y * q)}:${Math.round(z * q)}`;
 }
 
 function CameraAutoFit({ fitRootRef, controlsRef, fitKey }: CameraAutoFitProps) {
@@ -138,88 +129,7 @@ function EditablePart({
     [editableGeometry]
   );
 
-  const faceCenters = useMemo(() => {
-    const centers: THREE.Vector3[] = [];
-    const pos = editableGeometry.attributes.position;
-    const vA = new THREE.Vector3();
-    const vB = new THREE.Vector3();
-    const vC = new THREE.Vector3();
-    for (let i = 0; i < faceCount; i += 1) {
-      vA.fromBufferAttribute(pos, i * 3);
-      vB.fromBufferAttribute(pos, i * 3 + 1);
-      vC.fromBufferAttribute(pos, i * 3 + 2);
-      centers.push(new THREE.Vector3().add(vA).add(vB).add(vC).multiplyScalar(1 / 3));
-    }
-    return centers;
-  }, [editableGeometry, faceCount]);
-
-  const surfaceGrowData = useMemo<SurfaceGrowData>(() => {
-    const pos = editableGeometry.attributes.position;
-    const faceNormals = Array.from({ length: faceCount }, () => new THREE.Vector3(0, 0, 1));
-    const adjacency = Array.from({ length: faceCount }, () => [] as number[]);
-    const edgeMap = new Map<string, number[]>();
-
-    const a = new THREE.Vector3();
-    const b = new THREE.Vector3();
-    const c = new THREE.Vector3();
-    const ab = new THREE.Vector3();
-    const ac = new THREE.Vector3();
-
-    for (let faceIdx = 0; faceIdx < faceCount; faceIdx += 1) {
-      const i0 = faceIdx * 3;
-      const i1 = i0 + 1;
-      const i2 = i0 + 2;
-
-      a.fromBufferAttribute(pos, i0);
-      b.fromBufferAttribute(pos, i1);
-      c.fromBufferAttribute(pos, i2);
-
-      ab.subVectors(b, a);
-      ac.subVectors(c, a);
-      const n = new THREE.Vector3().crossVectors(ab, ac);
-      if (n.lengthSq() > 1e-12) {
-        n.normalize();
-      } else {
-        n.set(0, 0, 1);
-      }
-      faceNormals[faceIdx] = n;
-
-      const k0 = quantizedVertexKey(a.x, a.y, a.z);
-      const k1 = quantizedVertexKey(b.x, b.y, b.z);
-      const k2 = quantizedVertexKey(c.x, c.y, c.z);
-      const edges: [string, string][] = [
-        [k0, k1],
-        [k1, k2],
-        [k2, k0]
-      ];
-
-      for (const [u, v] of edges) {
-        const key = u < v ? `${u}|${v}` : `${v}|${u}`;
-        const faces = edgeMap.get(key);
-        if (faces) {
-          faces.push(faceIdx);
-        } else {
-          edgeMap.set(key, [faceIdx]);
-        }
-      }
-    }
-
-    edgeMap.forEach((faces) => {
-      if (faces.length < 2) {
-        return;
-      }
-      for (let i = 0; i < faces.length; i += 1) {
-        for (let j = i + 1; j < faces.length; j += 1) {
-          const f0 = faces[i];
-          const f1 = faces[j];
-          adjacency[f0].push(f1);
-          adjacency[f1].push(f0);
-        }
-      }
-    });
-
-    return { faceNormals, adjacency };
-  }, [editableGeometry, faceCount]);
+  const surfaceTopology = useMemo(() => buildSurfaceTopology(editableGeometry), [editableGeometry]);
 
   const brushRadiusWorld = useMemo(() => {
     editableGeometry.computeBoundingBox();
@@ -264,54 +174,20 @@ function EditablePart({
     }
 
     const faceIndex = event.faceIndex;
-    if (faceIndex == null || faceIndex < 0 || faceIndex >= faceCenters.length) {
+    if (faceIndex == null || faceIndex < 0 || faceIndex >= surfaceTopology.faceCenters.length) {
       return;
     }
 
-    const origin = faceCenters[faceIndex];
+    const origin = surfaceTopology.faceCenters[faceIndex];
     const targets: number[] = [];
 
-    for (let i = 0; i < faceCenters.length; i += 1) {
-      if (origin.distanceTo(faceCenters[i]) <= brushRadiusWorld) {
+    for (let i = 0; i < surfaceTopology.faceCenters.length; i += 1) {
+      if (origin.distanceTo(surfaceTopology.faceCenters[i]) <= brushRadiusWorld) {
         targets.push(i);
       }
     }
 
-    onPaintFaces(targets);
-  };
-
-  const selectContiguousSurface = (startFaceIndex: number): number[] => {
-    const { faceNormals, adjacency } = surfaceGrowData;
-    if (startFaceIndex < 0 || startFaceIndex >= faceNormals.length) {
-      return [];
-    }
-
-    const visited = new Uint8Array(faceNormals.length);
-    const queue: number[] = [startFaceIndex];
-    const selected: number[] = [];
-    const cosineThreshold = Math.cos(THREE.MathUtils.degToRad(34));
-
-    visited[startFaceIndex] = 1;
-
-    while (queue.length > 0) {
-      const current = queue.pop()!;
-      selected.push(current);
-
-      const currentNormal = faceNormals[current];
-      for (const next of adjacency[current]) {
-        if (visited[next]) {
-          continue;
-        }
-
-        const dot = currentNormal.dot(faceNormals[next]);
-        if (dot >= cosineThreshold) {
-          visited[next] = 1;
-          queue.push(next);
-        }
-      }
-    }
-
-    return selected;
+    onPaintFaces(targets, paintLabel);
   };
 
   const placeForce = (event: ThreeEvent<MouseEvent>) => {
@@ -337,13 +213,25 @@ function EditablePart({
       onPointerDown={(event) => {
         if (!placeForceMode && paintLabel) {
           if (paintLabel === "preserved") {
+            if (event.button !== 0 && event.button !== 2) {
+              return;
+            }
+            event.stopPropagation();
+            event.nativeEvent.preventDefault();
             const faceIndex = event.faceIndex;
             if (faceIndex != null && faceIndex >= 0 && faceIndex < faceCount) {
-              onPaintFaces(selectContiguousSurface(faceIndex));
+              const label = event.button === 2 ? "design" : "preserved";
+              onPaintFaces(
+                resolvePreservedSurfaceSelection(faceIndex, surfaceTopology, event.ray.clone()),
+                label
+              );
             }
             return;
           }
 
+          if (event.button !== 0) {
+            return;
+          }
           setIsPainting(true);
           paint(event);
         }
@@ -355,6 +243,12 @@ function EditablePart({
       }}
       onPointerUp={() => setIsPainting(false)}
       onPointerLeave={() => setIsPainting(false)}
+      onContextMenu={(event) => {
+        if (paintLabel === "preserved") {
+          event.stopPropagation();
+          event.nativeEvent.preventDefault();
+        }
+      }}
       onClick={placeForce}
       castShadow
       receiveShadow

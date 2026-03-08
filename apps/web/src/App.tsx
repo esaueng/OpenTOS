@@ -566,7 +566,7 @@ export default function App() {
             />
           </label>
           <p className="small-note">
-            Preserved mode: click once inside a through-hole to select its full inner surface.
+            Preserved mode: left-click to keep geometry, right-click to clear it back to design.
           </p>
           <p className="small-note">Preserved faces: {preservedCount}</p>
           <p className="small-note">Obstacle faces: {obstacleCount}</p>
@@ -818,11 +818,8 @@ export default function App() {
             faceLabels={faceLabels}
             paintLabel={paintLabel}
             brushRadius={brushRadius}
-            onPaintFaces={(indices) => {
-              if (!paintLabel) {
-                return;
-              }
-              setFaceLabels((current) => applyFaceLabels(current, indices, paintLabel));
+            onPaintFaces={(indices, label) => {
+              setFaceLabels((current) => applyFaceLabels(current, indices, label));
             }}
             placeForceMode={placeForceMode}
             onPlaceForce={addForce}
