@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OutcomeTiles } from "./components/OutcomeTiles";
 import { ViewerCanvas } from "./components/ViewerCanvas";
 import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
+import { MATERIAL_OPTIONS } from "./materials";
 import {
   applyFaceLabels,
   buildSolvePayload,
@@ -687,8 +688,20 @@ export default function App() {
           <h2>4. Study Setup</h2>
           <label>
             Material
-            <select value={settings.material} onChange={() => undefined}>
-              <option value="Aluminum 6061">Aluminum 6061</option>
+            <select
+              value={settings.material}
+              onChange={(event) =>
+                setSettings((curr) => ({
+                  ...curr,
+                  material: event.target.value as StudySettings["material"]
+                }))
+              }
+            >
+              {MATERIAL_OPTIONS.map((materialName) => (
+                <option key={materialName} value={materialName}>
+                  {materialName}
+                </option>
+              ))}
             </select>
           </label>
           <label>

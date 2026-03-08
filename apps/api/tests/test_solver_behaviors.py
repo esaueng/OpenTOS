@@ -54,7 +54,7 @@ def _request(outcome_count: int = 3) -> StudyCreateRequest:
                 ],
             }
         ],
-        material="Aluminum 6061",
+        material="PLA",
         targets={"safetyFactor": 2.2, "outcomeCount": outcome_count, "massReductionGoalPct": 45.0},
     )
 
