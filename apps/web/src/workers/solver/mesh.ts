@@ -349,3 +349,62 @@ export function makePreservedGeometry(positions: Float32Array, preservedFaces: S
   geometry.computeVertexNormals();
   return geometry;
 }
+
+function makeNodeSphere(center: [number, number, number], radius: number): THREE.BufferGeometry {
+  const geometry = new THREE.IcosahedronGeometry(radius, 2);
+  geometry.translate(center[0], center[1], center[2]);
+  return geometry;
+}
+
+function makeEdgeCylinder(
+  start: [number, number, number],
+  end: [number, number, number],
+  radius: number
+): THREE.BufferGeometry | null {
+  const startVec = new THREE.Vector3(...start);
+  const endVec = new THREE.Vector3(...end);
+  const delta = endVec.clone().sub(startVec);
+  const length = delta.length();
+  if (length <= 1e-6) {
+    return null;
+  }
+
+  const geometry = new THREE.CylinderGeometry(radius, radius, length, 12, 1, false);
+  const midpoint = startVec.clone().add(endVec).multiplyScalar(0.5);
+  const axis = delta.clone().normalize();
+  const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+  geometry.applyQuaternion(quaternion);
+  geometry.translate(midpoint.x, midpoint.y, midpoint.z);
+  return geometry;
+}
+
+export function buildTrussGeometry(
+  nodes: [number, number, number][],
+  edges: [number, number][],
+  radius: number
+): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+
+  for (const center of nodes) {
+    parts.push(makeNodeSphere(center, radius * 1.18));
+  }
+
+  for (const [a, b] of edges) {
+    const cylinder = makeEdgeCylinder(nodes[a], nodes[b], radius);
+    if (cylinder) {
+      parts.push(cylinder);
+    }
+  }
+
+  if (parts.length === 0) {
+    const fallback = new THREE.IcosahedronGeometry(radius * 1.5, 1);
+    fallback.computeVertexNormals();
+    return fallback;
+  }
+
+  const merged = BufferGeometryUtils.mergeGeometries(parts, true);
+  const welded = BufferGeometryUtils.mergeVertices(merged, radius * 0.2);
+  welded.computeVertexNormals();
+  taubinSmoothIndexed(welded, 6);
+  return welded;
+}
