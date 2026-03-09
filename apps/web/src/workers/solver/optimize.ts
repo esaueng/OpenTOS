@@ -13,6 +13,7 @@ interface DensitySolveArgs {
   smoothFactor: number;
   minThickness: number;
   voidBias: number;
+  surfaceDistance: Float32Array;
 }
 
 const NEIGHBORS: [number, number, number][] = [
@@ -198,9 +199,120 @@ function carveInteriorVoids(
   return carved;
 }
 
+function openExteriorWindows(
+  occupancy: Uint8Array,
+  influence: Float32Array,
+  surfaceDistance: Float32Array,
+  domainMask: Uint8Array,
+  preserveMask: Uint8Array,
+  anchorMask: Uint8Array,
+  grid: VoxelGrid,
+  aggressiveness: number
+): Uint8Array {
+  const opened = occupancy.slice();
+  const passes = Math.max(1, Math.min(3, Math.round(1 + aggressiveness * 2)));
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const next = opened.slice();
+    const shellBand = 1.2 + pass * 0.8;
+    const threshold = 0.46 + aggressiveness * 0.2 + pass * 0.05;
+
+    for (let idx = 0; idx < opened.length; idx += 1) {
+      if (!opened[idx] || !domainMask[idx] || preserveMask[idx] || anchorMask[idx]) {
+        continue;
+      }
+      if (surfaceDistance[idx] > shellBand) {
+        continue;
+      }
+
+      const { x, y, z } = decodeIndex(grid, idx);
+      let outsideNeighbors = 0;
+      let occupiedNeighbors = 0;
+      for (const [dx, dy, dz] of NEIGHBORS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const nz = z + dz;
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+          continue;
+        }
+        const nIdx = index3D(grid, nx, ny, nz);
+        if (!domainMask[nIdx] || !opened[nIdx]) {
+          outsideNeighbors += 1;
+        } else {
+          occupiedNeighbors += 1;
+        }
+      }
+
+      if (outsideNeighbors < 1) {
+        continue;
+      }
+      if (occupiedNeighbors >= 3 && influence[idx] < threshold) {
+        next[idx] = 0;
+      }
+    }
+
+    opened.set(next);
+  }
+
+  return opened;
+}
+
+function stripOuterShell(
+  occupancy: Uint8Array,
+  influence: Float32Array,
+  surfaceDistance: Float32Array,
+  domainMask: Uint8Array,
+  preserveMask: Uint8Array,
+  anchorMask: Uint8Array,
+  grid: VoxelGrid,
+  aggressiveness: number
+): Uint8Array {
+  const stripped = occupancy.slice();
+  const passes = Math.max(1, Math.min(2, Math.round(1 + aggressiveness)));
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const next = stripped.slice();
+    const shellBand = 1.4 + pass * 0.7;
+    const threshold = 0.48 + aggressiveness * 0.18 + pass * 0.05;
+
+    for (let idx = 0; idx < stripped.length; idx += 1) {
+      if (!stripped[idx] || !domainMask[idx] || preserveMask[idx] || anchorMask[idx]) {
+        continue;
+      }
+      if (surfaceDistance[idx] > shellBand) {
+        continue;
+      }
+
+      const { x, y, z } = decodeIndex(grid, idx);
+      let outsideNeighbors = 0;
+      for (const [dx, dy, dz] of NEIGHBORS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const nz = z + dz;
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+          continue;
+        }
+        const nIdx = index3D(grid, nx, ny, nz);
+        if (!domainMask[nIdx] || !stripped[nIdx]) {
+          outsideNeighbors += 1;
+        }
+      }
+
+      if (outsideNeighbors >= 1 && influence[idx] < threshold) {
+        next[idx] = 0;
+      }
+    }
+
+    stripped.set(next);
+  }
+
+  return stripped;
+}
+
 function pruneToVolumeTarget(
   occupancy: Uint8Array,
   influence: Float32Array,
+  surfaceDistance: Float32Array,
   domainMask: Uint8Array,
   preserveMask: Uint8Array,
   anchorMask: Uint8Array,
@@ -256,9 +368,10 @@ function pruneToVolumeTarget(
       }
 
       const neighborSupport = occupiedNeighbors / NEIGHBORS.length;
+      const shellDepth = Math.min(surfaceDistance[idx], 6) / 6;
       candidates.push({
         idx,
-        score: influence[idx] * 0.8 + neighborSupport * 0.2
+        score: influence[idx] * 0.72 + neighborSupport * 0.14 + shellDepth * 0.14
       });
     }
 
@@ -356,7 +469,8 @@ export function solveDensityField({
   iterations,
   smoothFactor,
   minThickness,
-  voidBias
+  voidBias,
+  surfaceDistance
 }: DensitySolveArgs): DensitySolveResult {
   const rho = new Float32Array(influence.length);
 
@@ -398,16 +512,30 @@ export function solveDensityField({
 
   const occupancy = new Uint8Array(rho.length);
   for (let i = 0; i < rho.length; i += 1) {
-    if (domainMask[i] && (preserveMask[i] || rho[i] >= 0.52)) {
+    const shellThresholdBoost = surfaceDistance[i] <= 1.6 ? 0.04 + voidBias * 0.05 : 0;
+    const occupancyThreshold = 0.52 + shellThresholdBoost;
+    const shellProtected = surfaceDistance[i] > 1.4 || influence[i] > 0.44 + voidBias * 0.08 || anchorMask[i];
+    if (domainMask[i] && (preserveMask[i] || (rho[i] >= occupancyThreshold && shellProtected))) {
       occupancy[i] = 1;
     }
   }
 
   const carveAggressiveness = clamp01((0.38 - targetVolumeFraction) * 3.2 + voidBias * 0.4);
-  const carved = carveInteriorVoids(occupancy, influence, domainMask, preserveMask, grid, carveAggressiveness);
-  const pruned = pruneToVolumeTarget(
-    carved,
+  const interiorCarved = carveInteriorVoids(occupancy, influence, domainMask, preserveMask, grid, carveAggressiveness);
+  const openedShell = openExteriorWindows(
+    interiorCarved,
     influence,
+    surfaceDistance,
+    domainMask,
+    preserveMask,
+    anchorMask,
+    grid,
+    carveAggressiveness
+  );
+  const pruned = pruneToVolumeTarget(
+    openedShell,
+    influence,
+    surfaceDistance,
     domainMask,
     preserveMask,
     anchorMask,
@@ -417,7 +545,17 @@ export function solveDensityField({
   );
   const anchored = retainConnectedToAnchors(pruned, domainMask, preserveMask, anchorMask, grid);
   const thicknessEnforced = enforceThickness(anchored, domainMask, preserveMask, grid, minThickness);
-  const finalOccupancy = retainConnectedToAnchors(thicknessEnforced, domainMask, preserveMask, anchorMask, grid);
+  const shellStripped = stripOuterShell(
+    thicknessEnforced,
+    influence,
+    surfaceDistance,
+    domainMask,
+    preserveMask,
+    anchorMask,
+    grid,
+    carveAggressiveness
+  );
+  const finalOccupancy = retainConnectedToAnchors(shellStripped, domainMask, preserveMask, anchorMask, grid);
   const densitySmoothed = smoothDensityField(rho, domainMask, grid, 2);
 
   let occupied = 0;
