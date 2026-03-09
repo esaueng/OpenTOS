@@ -460,6 +460,175 @@ export function forceSeedMask(
   return mask;
 }
 
+export function nearestDomainPoint(
+  point: [number, number, number],
+  domainMask: Uint8Array,
+  grid: VoxelGrid
+): [number, number, number] | null {
+  const x = clamp(Math.floor((point[0] - grid.origin[0]) / grid.step), 0, grid.nx - 1);
+  const y = clamp(Math.floor((point[1] - grid.origin[1]) / grid.step), 0, grid.ny - 1);
+  const z = clamp(Math.floor((point[2] - grid.origin[2]) / grid.step), 0, grid.nz - 1);
+
+  const direct = index3D(grid, x, y, z);
+  if (domainMask[direct]) {
+    return voxelCenter(grid, x, y, z);
+  }
+
+  let bestIndex = -1;
+  let bestDist2 = Number.POSITIVE_INFINITY;
+  const radius = 8;
+
+  for (let dz = -radius; dz <= radius; dz += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const nx = x + dx;
+        const ny = y + dy;
+        const nz = z + dz;
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+          continue;
+        }
+        const idx = index3D(grid, nx, ny, nz);
+        if (!domainMask[idx]) {
+          continue;
+        }
+        const center = voxelCenter(grid, nx, ny, nz);
+        const ddx = center[0] - point[0];
+        const ddy = center[1] - point[1];
+        const ddz = center[2] - point[2];
+        const dist2 = ddx * ddx + ddy * ddy + ddz * ddz;
+        if (dist2 < bestDist2) {
+          bestDist2 = dist2;
+          bestIndex = idx;
+        }
+      }
+    }
+  }
+
+  if (bestIndex < 0) {
+    return null;
+  }
+
+  const best = decodeIndex(grid, bestIndex);
+  return voxelCenter(grid, best.x, best.y, best.z);
+}
+
+function paintTubeSample(
+  mask: Uint8Array,
+  center: [number, number, number],
+  radiusWorld: number,
+  domainMask: Uint8Array,
+  grid: VoxelGrid
+): void {
+  const minX = clamp(Math.floor((center[0] - radiusWorld - grid.origin[0]) / grid.step), 0, grid.nx - 1);
+  const maxX = clamp(Math.ceil((center[0] + radiusWorld - grid.origin[0]) / grid.step), 0, grid.nx - 1);
+  const minY = clamp(Math.floor((center[1] - radiusWorld - grid.origin[1]) / grid.step), 0, grid.ny - 1);
+  const maxY = clamp(Math.ceil((center[1] + radiusWorld - grid.origin[1]) / grid.step), 0, grid.ny - 1);
+  const minZ = clamp(Math.floor((center[2] - radiusWorld - grid.origin[2]) / grid.step), 0, grid.nz - 1);
+  const maxZ = clamp(Math.ceil((center[2] + radiusWorld - grid.origin[2]) / grid.step), 0, grid.nz - 1);
+  const radius2 = radiusWorld * radiusWorld;
+
+  for (let z = minZ; z <= maxZ; z += 1) {
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const idx = index3D(grid, x, y, z);
+        if (!domainMask[idx]) {
+          continue;
+        }
+        const voxel = voxelCenter(grid, x, y, z);
+        const dx = voxel[0] - center[0];
+        const dy = voxel[1] - center[1];
+        const dz = voxel[2] - center[2];
+        if (dx * dx + dy * dy + dz * dz <= radius2) {
+          mask[idx] = 1;
+        }
+      }
+    }
+  }
+}
+
+function paintTubeSegment(
+  mask: Uint8Array,
+  start: [number, number, number],
+  end: [number, number, number],
+  radiusWorld: number,
+  domainMask: Uint8Array,
+  grid: VoxelGrid
+): void {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const dz = end[2] - start[2];
+  const length = Math.hypot(dx, dy, dz);
+  const steps = Math.max(2, Math.ceil(length / Math.max(grid.step * 0.65, 1e-6)));
+
+  for (let stepIdx = 0; stepIdx <= steps; stepIdx += 1) {
+    const t = stepIdx / steps;
+    paintTubeSample(
+      mask,
+      [start[0] + dx * t, start[1] + dy * t, start[2] + dz * t],
+      radiusWorld,
+      domainMask,
+      grid
+    );
+  }
+}
+
+export function rasterizeConnectionGraph(
+  anchorPoints: [number, number, number][],
+  domainMask: Uint8Array,
+  grid: VoxelGrid,
+  radiusWorld: number
+): Uint8Array {
+  const snapped = anchorPoints
+    .map((point) => nearestDomainPoint(point, domainMask, grid))
+    .filter((point): point is [number, number, number] => point != null);
+  const mask = new Uint8Array(grid.total);
+
+  if (snapped.length === 0) {
+    return mask;
+  }
+
+  for (const point of snapped) {
+    paintTubeSample(mask, point, radiusWorld * 1.15, domainMask, grid);
+  }
+
+  if (snapped.length === 1) {
+    return dilateMask(mask, grid, 1);
+  }
+
+  const connected = new Set<number>([0]);
+  while (connected.size < snapped.length) {
+    let bestA = -1;
+    let bestB = -1;
+    let bestDist2 = Number.POSITIVE_INFINITY;
+
+    for (const a of connected) {
+      for (let b = 0; b < snapped.length; b += 1) {
+        if (connected.has(b)) {
+          continue;
+        }
+        const dx = snapped[a][0] - snapped[b][0];
+        const dy = snapped[a][1] - snapped[b][1];
+        const dz = snapped[a][2] - snapped[b][2];
+        const dist2 = dx * dx + dy * dy + dz * dz;
+        if (dist2 < bestDist2) {
+          bestDist2 = dist2;
+          bestA = a;
+          bestB = b;
+        }
+      }
+    }
+
+    if (bestA < 0 || bestB < 0) {
+      break;
+    }
+
+    paintTubeSegment(mask, snapped[bestA], snapped[bestB], radiusWorld, domainMask, grid);
+    connected.add(bestB);
+  }
+
+  return dilateMask(mask, grid, 1);
+}
+
 export function regionCenterMask(
   regionFaces: number[][],
   positions: Float32Array,
