@@ -146,6 +146,8 @@ export default function App() {
         if (payload.status === "succeeded") {
           setOutcomes(payload.outcomes ?? []);
           setSelectedOutcomeId(payload.outcomes?.[0]?.id ?? null);
+          setShowOriginal(true);
+          setShowOutcomeOverlay(true);
           setJobId(null);
         }
 
@@ -298,6 +300,8 @@ export default function App() {
     setSelectedOutcomeObject(null);
     setWorkerWarnings([]);
     setIsSubmittingStudy(true);
+    setPaintLabel(null);
+    setPlaceForceMode(false);
 
     try {
       const payload = buildSolvePayload({
@@ -403,6 +407,8 @@ export default function App() {
         setOutcomes(localResult.outcomes);
         setSelectedOutcomeId(localResult.outcomes[0]?.id ?? null);
         setWorkerWarnings(localResult.warnings);
+        setShowOriginal(true);
+        setShowOutcomeOverlay(true);
         setJobStatus((current) =>
           current
             ? {

@@ -279,13 +279,13 @@ function OutcomeOverlay({ object, wireframe }) {
                     material.roughness = 0.72;
                 }
                 else {
-                    material.color = new THREE.Color("#2f353d");
+                    material.color = new THREE.Color("#b6bac2");
                     material.transparent = false;
                     material.opacity = 1;
-                    material.metalness = 0.18;
-                    material.roughness = 0.62;
-                    material.emissive = new THREE.Color("#0f141b");
-                    material.emissiveIntensity = 0.03;
+                    material.metalness = 0.72;
+                    material.roughness = 0.34;
+                    material.emissive = new THREE.Color("#141820");
+                    material.emissiveIntensity = 0.02;
                 }
                 material.side = THREE.DoubleSide;
                 material.depthWrite = true;

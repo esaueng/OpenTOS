@@ -8,18 +8,20 @@ import {
   computeBoundingBox,
   estimateSolverMemoryBytes,
   faceCountFromPositions,
+  faceCenter,
   getFaceSet,
   getPreservedData
 } from "./solver/geometry";
 import { combineInfluenceFields, computeBaseInfluenceFields } from "./solver/fields";
 import { exportOutcomeGlb } from "./solver/export";
 import { clamp01 } from "./solver/math";
-import { extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
+import { buildOrganicTrussGeometry, extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
 import { computeOutcomeMetrics, geometryVolume } from "./solver/metrics";
 import { solveDensityField } from "./solver/optimize";
 import type {
   BrowserQualityProfile,
   ForceVec,
+  PreservedTarget,
   WorkerInMessage,
   WorkerOutMessage,
   WorkerStage,
@@ -131,6 +133,124 @@ function outcomeRankScore(
   );
 }
 
+function pointDistanceSquared(a: [number, number, number], b: [number, number, number]): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  const dz = a[2] - b[2];
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function distanceToSegmentSquared(
+  point: [number, number, number],
+  start: [number, number, number],
+  end: [number, number, number]
+): number {
+  const sx = end[0] - start[0];
+  const sy = end[1] - start[1];
+  const sz = end[2] - start[2];
+  const px = point[0] - start[0];
+  const py = point[1] - start[1];
+  const pz = point[2] - start[2];
+  const segLen2 = Math.max(1e-9, sx * sx + sy * sy + sz * sz);
+  const t = clamp01((px * sx + py * sy + pz * sz) / segLen2);
+  const qx = start[0] + sx * t;
+  const qy = start[1] + sy * t;
+  const qz = start[2] + sz * t;
+  return pointDistanceSquared(point, [qx, qy, qz]);
+}
+
+function buildTrussBoostField(
+  grid: ReturnType<typeof buildVoxelGrid>,
+  domainMask: Uint8Array,
+  surfaceDistance: Float32Array,
+  preservedTargets: PreservedTarget[],
+  forces: ForceVec[]
+): Float32Array {
+  const out = new Float32Array(grid.total);
+  if (preservedTargets.length < 2) {
+    return out;
+  }
+
+  const segments: Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> = [];
+  const pairKeys = new Set<string>();
+  for (let i = 0; i < preservedTargets.length; i += 1) {
+    const nearest = preservedTargets
+      .map((target, idx) => ({
+        idx,
+        dist2: idx === i ? Number.POSITIVE_INFINITY : pointDistanceSquared(preservedTargets[i].point, target.point)
+      }))
+      .sort((a, b) => a.dist2 - b.dist2)
+      .slice(0, Math.min(2, preservedTargets.length - 1));
+    for (const entry of nearest) {
+      const left = Math.min(i, entry.idx);
+      const right = Math.max(i, entry.idx);
+      const key = `${left}:${right}`;
+      if (pairKeys.has(key)) {
+        continue;
+      }
+      pairKeys.add(key);
+      segments.push({
+        start: preservedTargets[left].point,
+        end: preservedTargets[right].point,
+        weight: Math.sqrt(Math.max(preservedTargets[left].weight * preservedTargets[right].weight, 0.25))
+      });
+    }
+  }
+
+  for (const force of forces) {
+    const nearestTargets = preservedTargets
+      .map((target) => ({ target, dist2: pointDistanceSquared(force.point, target.point) }))
+      .sort((a, b) => a.dist2 - b.dist2)
+      .slice(0, Math.min(2, preservedTargets.length));
+    for (const entry of nearestTargets) {
+      segments.push({
+        start: force.point,
+        end: entry.target.point,
+        weight: Math.max(0.75, Math.sqrt(entry.target.weight) * 0.95)
+      });
+    }
+  }
+
+  const sigma = Math.max(grid.step * 1.6, grid.step * (preservedTargets.length > 3 ? 1.5 : 1.8));
+  const sigma2 = 2 * sigma * sigma;
+  const nodeSigma2 = 2 * (sigma * 1.7) * (sigma * 1.7);
+
+  for (let z = 0; z < grid.nz; z += 1) {
+    for (let y = 0; y < grid.ny; y += 1) {
+      for (let x = 0; x < grid.nx; x += 1) {
+        const idx = x + grid.nx * (y + grid.ny * z);
+        if (!domainMask[idx]) {
+          continue;
+        }
+        const point = [
+          grid.origin[0] + (x + 0.5) * grid.step,
+          grid.origin[1] + (y + 0.5) * grid.step,
+          grid.origin[2] + (z + 0.5) * grid.step
+        ] as [number, number, number];
+
+        let corridor = 0;
+        for (const segment of segments) {
+          const dist2 = distanceToSegmentSquared(point, segment.start, segment.end);
+          corridor = Math.max(corridor, Math.exp(-dist2 / sigma2) * segment.weight);
+        }
+
+        let node = 0;
+        for (const target of preservedTargets) {
+          node = Math.max(node, Math.exp(-pointDistanceSquared(point, target.point) / nodeSigma2) * target.weight);
+        }
+        for (const force of forces) {
+          node = Math.max(node, Math.exp(-pointDistanceSquared(point, force.point) / nodeSigma2) * 0.95);
+        }
+
+        const interiorBias = 0.28 + clamp01((surfaceDistance[idx] - 0.8) / 3.8) * 0.92;
+        out[idx] = clamp01(Math.max(corridor * 1.18, node * 0.82) * interiorBias);
+      }
+    }
+  }
+
+  return out;
+}
+
 async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
   const request = payload.request;
   const warnings: string[] = [];
@@ -149,7 +269,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
   }
 
   const totalFaces = faceCountFromPositions(positions);
-  const preservedData = getPreservedData(request, totalFaces);
+  const preservedData = getPreservedData(request, totalFaces, positions);
   const fixedFaceSet = fixedFacesFromLoadCases(request);
   const designFaceSet = getFaceSet(request.designRegion.faceIndices, totalFaces);
   const obstacleFaceSet = new Set<number>();
@@ -185,7 +305,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const bbox = computeBoundingBox(positions);
   const grid = buildVoxelGrid(positions, qualityConfig.targetVoxels);
-  const { domainMask } = voxelizeDomain(positions, grid);
+  const { domainMask, surfaceMask } = voxelizeDomain(positions, grid);
 
   postProgress({
     stage: "voxelize",
@@ -206,9 +326,11 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     ? dilateMask(rasterizePreservedMask(positions, obstacleFaceSet, grid, grid.step * 0.95), grid, 1)
     : new Uint8Array(grid.total);
 
-  const designMask = designFaceSet.size
-    ? dilateMask(rasterizePreservedMask(positions, designFaceSet, grid, grid.step * 1.1), grid, 3)
-    : domainMask.slice();
+  const designCoverage = totalFaces > 0 ? designFaceSet.size / totalFaces : 0;
+  const designMask =
+    !designFaceSet.size || designCoverage > 0.55
+      ? domainMask.slice()
+      : dilateMask(rasterizePreservedMask(positions, designFaceSet, grid, grid.step * 1.1), grid, 6);
 
   for (let i = 0; i < preserveMask.length; i += 1) {
     if (!domainMask[i]) {
@@ -241,6 +363,33 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const preservedDistance = distanceFromMask(preserveSeedMask, constrainedDomain, grid);
   const forceDistance = distanceFromMask(forceSeeds, constrainedDomain, grid);
+  const surfaceDistance = distanceFromMask(surfaceMask, constrainedDomain, grid);
+
+  const preservedTargets = preservedData.groups
+    .map((group) => {
+      if (!group.length) {
+        return null;
+      }
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      for (const faceIndex of group) {
+        const [cx, cy, cz] = faceCenter(positions, faceIndex);
+        sx += cx;
+        sy += cy;
+        sz += cz;
+      }
+      const inv = 1 / group.length;
+      return {
+        point: [sx * inv, sy * inv, sz * inv] as [number, number, number],
+        weight: Math.min(1.8, Math.max(0.6, Math.sqrt(group.length) * 0.14))
+      };
+    })
+    .filter((value): value is { point: [number, number, number]; weight: number } => value !== null);
+  const trussBoostField =
+    preservedTargets.length >= 3
+      ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces)
+      : null;
 
   postProgress({
     stage: "fem-solve",
@@ -257,6 +406,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     preservedDistance,
     forceDistance,
     forces,
+    preservedTargets,
     qualityConfig.connectivityIterations
   );
 
@@ -274,6 +424,28 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     const params = variantParams(outcomes.length, request.targets.outcomeCount, qualityConfig.minThicknessVoxels, attempt);
     params.targetVolumeFraction = clamp01(targetFraction + (params.targetVolumeFraction - 0.22) * 0.55);
     const influence = combineInfluenceFields(baseFields, constrainedDomain, params, request.targets.safetyFactor);
+    if (trussBoostField) {
+      for (let i = 0; i < influence.length; i += 1) {
+        if (!constrainedDomain[i]) {
+          continue;
+        }
+        influence[i] = clamp01(Math.max(influence[i] * 0.26, trussBoostField[i]));
+      }
+    }
+    for (let i = 0; i < influence.length; i += 1) {
+      if (!constrainedDomain[i] || preserveMask[i]) {
+        continue;
+      }
+      const surfaceDepth = Math.min(surfaceDistance[i], 6);
+      const shellPenalty = Math.exp(-surfaceDepth / 1.4);
+      const protectedBand = Math.max(
+        Math.exp(-preservedDistance[i] * 0.45),
+        Math.exp(-forceDistance[i] * 0.45)
+      );
+      const attenuation = 1 - shellPenalty * (1 - protectedBand) * (0.82 + params.voidBias * 0.55);
+      const coreBoost = clamp01((surfaceDepth - 1.2) / 4.2) * (0.16 + params.medialWeight * 0.12);
+      influence[i] = clamp01(influence[i] * attenuation + coreBoost);
+    }
 
     const densityResult = solveDensityField({
       grid,
@@ -285,7 +457,8 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       iterations: qualityConfig.densityIterations,
       smoothFactor: params.smoothFactor,
       minThickness: params.minThickness,
-      voidBias: params.voidBias
+      voidBias: params.voidBias,
+      surfaceDistance
     });
 
     const signature = computeSignature(densityResult.occupancy, constrainedDomain);
@@ -309,13 +482,26 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       warnings
     });
 
-    const generatedGeometry = extractIsoSurface(
-      grid,
-      densityResult.density,
-      constrainedDomain,
-      0.52,
-      qualityConfig.taubinIterations
-    );
+    const generatedGeometry =
+      trussBoostField && preservedTargets.length >= 3
+        ? buildOrganicTrussGeometry({
+            preservedTargets,
+            forces,
+            bboxCenter: [
+              (bbox.min[0] + bbox.max[0]) * 0.5,
+              (bbox.min[1] + bbox.max[1]) * 0.5,
+              (bbox.min[2] + bbox.max[2]) * 0.5
+            ],
+            characteristicLength: bbox.diagonal,
+            taubinIterations: qualityConfig.taubinIterations
+          })
+        : extractIsoSurface(
+            grid,
+            densityResult.density,
+            constrainedDomain,
+            0.52,
+            qualityConfig.taubinIterations
+          );
 
     const preservedGeometry = makePreservedGeometry(positions, preservedData.allFaces);
     const glbBase64 = await exportOutcomeGlb(preservedGeometry, generatedGeometry);

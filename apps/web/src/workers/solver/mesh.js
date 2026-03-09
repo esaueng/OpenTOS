@@ -177,6 +177,92 @@ export function extractIsoSurface(grid, density, domainMask, isoLevel, taubinIte
     taubinSmoothIndexed(welded, Math.max(2, Math.round(taubinIterations * 0.35)));
     return welded;
 }
+function pointDistanceSquared(a, b) {
+    const dx = a[0] - b[0];
+    const dy = a[1] - b[1];
+    const dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+function buildConnectionSegments(preservedTargets, forces) {
+    const segments = [];
+    const pairKeys = new Set();
+    for (let i = 0; i < preservedTargets.length; i += 1) {
+        const nearest = preservedTargets
+            .map((target, idx) => ({
+            idx,
+            dist2: idx === i ? Number.POSITIVE_INFINITY : pointDistanceSquared(preservedTargets[i].point, target.point)
+        }))
+            .sort((a, b) => a.dist2 - b.dist2)
+            .slice(0, Math.min(2, preservedTargets.length - 1));
+        for (const entry of nearest) {
+            const left = Math.min(i, entry.idx);
+            const right = Math.max(i, entry.idx);
+            const key = `${left}:${right}`;
+            if (pairKeys.has(key)) {
+                continue;
+            }
+            pairKeys.add(key);
+            segments.push({
+                start: preservedTargets[left].point,
+                end: preservedTargets[right].point,
+                weight: Math.sqrt(Math.max(preservedTargets[left].weight * preservedTargets[right].weight, 0.25))
+            });
+        }
+    }
+    for (const force of forces) {
+        const nearestTargets = preservedTargets
+            .map((target) => ({ target, dist2: pointDistanceSquared(force.point, target.point) }))
+            .sort((a, b) => a.dist2 - b.dist2)
+            .slice(0, Math.min(2, preservedTargets.length));
+        for (const entry of nearestTargets) {
+            segments.push({
+                start: force.point,
+                end: entry.target.point,
+                weight: Math.max(0.75, Math.sqrt(entry.target.weight) * 0.95)
+            });
+        }
+    }
+    return segments;
+}
+export function buildOrganicTrussGeometry(args) {
+    const segments = buildConnectionSegments(args.preservedTargets, args.forces);
+    if (segments.length === 0) {
+        const fallback = new THREE.SphereGeometry(args.characteristicLength * 0.04, 12, 10);
+        fallback.computeVertexNormals();
+        return fallback;
+    }
+    const center = new THREE.Vector3(...args.bboxCenter);
+    const radiusBase = Math.max(args.characteristicLength * 0.018, 0.015);
+    const parts = [];
+    for (const segment of segments) {
+        const start = new THREE.Vector3(...segment.start);
+        const end = new THREE.Vector3(...segment.end);
+        const midpoint = start.clone().add(end).multiplyScalar(0.5);
+        const inward = center.clone().sub(midpoint);
+        const bendScale = start.distanceTo(end) * 0.1;
+        if (inward.lengthSq() > 1e-10) {
+            midpoint.add(inward.normalize().multiplyScalar(bendScale));
+        }
+        const curve = new THREE.CatmullRomCurve3([start, midpoint, end]);
+        const radius = radiusBase * (0.72 + segment.weight * 0.42);
+        parts.push(new THREE.TubeGeometry(curve, 24, radius, 10, false));
+    }
+    for (const target of args.preservedTargets) {
+        const joint = new THREE.SphereGeometry(radiusBase * (1.18 + target.weight * 0.25), 10, 10);
+        joint.translate(target.point[0], target.point[1], target.point[2]);
+        parts.push(joint);
+    }
+    for (const force of args.forces) {
+        const joint = new THREE.SphereGeometry(radiusBase * 1.02, 9, 9);
+        joint.translate(force.point[0], force.point[1], force.point[2]);
+        parts.push(joint);
+    }
+    const merged = BufferGeometryUtils.mergeGeometries(parts, false) ?? new THREE.BufferGeometry();
+    const welded = BufferGeometryUtils.mergeVertices(merged, radiusBase * 0.12);
+    welded.computeVertexNormals();
+    taubinSmoothIndexed(welded, Math.max(4, Math.round(args.taubinIterations * 0.55)));
+    return welded;
+}
 export function makePreservedGeometry(positions, preservedFaces) {
     const faceList = Array.from(preservedFaces.values()).sort((a, b) => a - b);
     const preserved = new Float32Array(faceList.length * 9);
