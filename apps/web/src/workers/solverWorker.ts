@@ -387,7 +387,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     })
     .filter((value): value is { point: [number, number, number]; weight: number } => value !== null);
   const trussBoostField =
-    preservedTargets.length >= 3
+    preservedTargets.length >= 2
       ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces)
       : null;
 
@@ -483,7 +483,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     });
 
     const generatedGeometry =
-      trussBoostField && preservedTargets.length >= 3
+      trussBoostField && preservedTargets.length >= 2
         ? buildOrganicTrussGeometry({
             preservedTargets,
             forces,

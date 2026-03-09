@@ -286,7 +286,7 @@ async function solveInWorker(payload) {
         };
     })
         .filter((value) => value !== null);
-    const trussBoostField = preservedTargets.length >= 3
+    const trussBoostField = preservedTargets.length >= 2
         ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces)
         : null;
     postProgress({
@@ -357,7 +357,7 @@ async function solveInWorker(payload) {
             qualityProfile: qualityConfig.id,
             warnings
         });
-        const generatedGeometry = trussBoostField && preservedTargets.length >= 3
+        const generatedGeometry = trussBoostField && preservedTargets.length >= 2
             ? buildOrganicTrussGeometry({
                 preservedTargets,
                 forces,
