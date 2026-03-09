@@ -43,7 +43,7 @@ def list_materials() -> MaterialsResponse:
 
 @router.post("/studies", response_model=StudyCreateResponse)
 def create_study(body: StudyCreateRequest, manager: JobManager = Depends(get_job_manager)) -> StudyCreateResponse:
-    validate_study_payload(body.model_dump(mode="json"))
+    validate_study_payload(body.model_dump(mode="json", exclude_none=True))
     study = manager.create_study(body)
     return StudyCreateResponse(study=study)
 
@@ -58,7 +58,7 @@ def get_study(study_id: str, manager: JobManager = Depends(get_job_manager)) -> 
 
 @router.post("/studies/{study_id}/run", response_model=StudyRunResponse)
 def run_study(study_id: str, body: RunOptions, request: Request, manager: JobManager = Depends(get_job_manager)) -> StudyRunResponse:
-    validate_run_options_payload(body.model_dump(mode="json"))
+    validate_run_options_payload(body.model_dump(mode="json", exclude_none=True))
     try:
         job_id = manager.run_study(study_id, body)
     except ValueError as exc:

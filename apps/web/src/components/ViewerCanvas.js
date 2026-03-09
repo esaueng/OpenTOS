@@ -4,7 +4,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { Environment, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
-import { buildSurfaceTopology, resolvePreservedSurfaceSelection } from "./selection";
+import { buildSurfaceTopology, resolvePreservedSurfaceSelectionFromCandidates, selectConnectedLabeledFaces } from "./selection";
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -15,6 +15,8 @@ const LABEL_COLORS = {
     design: "#8a95ad",
     unassigned: "#526071"
 };
+const CONTROL_NONE = -1;
+const DISABLED_MOUSE_BUTTON = CONTROL_NONE;
 function CameraAutoFit({ fitRootRef, controlsRef, fitKey }) {
     const { camera, invalidate } = useThree();
     useEffect(() => {
@@ -56,7 +58,9 @@ function CameraAutoFit({ fitRootRef, controlsRef, fitKey }) {
     return null;
 }
 function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFaces, placeForceMode, onPlaceForce }) {
+    const { camera, gl } = useThree();
     const meshRef = useRef(null);
+    const lastPreservedFacesRef = useRef([]);
     const [isPainting, setIsPainting] = useState(false);
     const editableGeometry = useMemo(() => {
         const local = geometry.index ? geometry.toNonIndexed() : geometry.clone();
@@ -125,21 +129,105 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
             : new THREE.Vector3(0, 0, 1);
         onPlaceForce([point.x, point.y, point.z], [faceNormal.x, faceNormal.y, faceNormal.z]);
     };
-    return (_jsx("mesh", { ref: meshRef, geometry: editableGeometry, onPointerDown: (event) => {
-            if (!placeForceMode && paintLabel) {
-                if (paintLabel === "preserved") {
-                    if (event.button !== 0 && event.button !== 2) {
+    const applyPreservedSelection = (event, label) => {
+        const fallbackFaceIndex = event.faceIndex;
+        const candidateFaceIndices = meshRef.current != null
+            ? (() => {
+                const raycaster = new THREE.Raycaster(event.ray.origin.clone(), event.ray.direction.clone());
+                raycaster.firstHitOnly = false;
+                const intersections = raycaster.intersectObject(meshRef.current, false);
+                return Array.from(new Set(intersections
+                    .map((intersection) => intersection.faceIndex)
+                    .filter((faceIndex) => faceIndex != null && faceIndex >= 0 && faceIndex < faceCount)));
+            })()
+            : [];
+        if (candidateFaceIndices.length === 0 && (fallbackFaceIndex == null || fallbackFaceIndex < 0 || fallbackFaceIndex >= faceCount)) {
+            return;
+        }
+        const faceIndicesToResolve = candidateFaceIndices.length > 0
+            ? candidateFaceIndices
+            : [fallbackFaceIndex];
+        const resolvedFaces = resolvePreservedSurfaceSelectionFromCandidates(faceIndicesToResolve, surfaceTopology, event.ray.clone());
+        const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
+            faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+        const facesToApply = label === "design"
+            ? preservedCandidateFace != null
+                ? selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved")
+                : lastPreservedFacesRef.current
+            : resolvedFaces;
+        if (facesToApply.length === 0) {
+            return;
+        }
+        if (label === "preserved") {
+            lastPreservedFacesRef.current = facesToApply;
+        }
+        else if (label === "design") {
+            lastPreservedFacesRef.current = [];
+        }
+        onPaintFaces(facesToApply, label);
+    };
+    useEffect(() => {
+        if (paintLabel !== "preserved" || placeForceMode) {
+            return;
+        }
+        let lastHandledAt = 0;
+        const clearPreservedAtClientPoint = (clientX, clientY) => {
+            if (meshRef.current) {
+                const rect = gl.domElement.getBoundingClientRect();
+                const pointer = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+                const raycaster = new THREE.Raycaster();
+                raycaster.firstHitOnly = false;
+                raycaster.setFromCamera(pointer, camera);
+                const intersections = raycaster.intersectObject(meshRef.current, false);
+                const candidateFaceIndices = Array.from(new Set(intersections
+                    .map((intersection) => intersection.faceIndex)
+                    .filter((faceIndex) => faceIndex != null && faceIndex >= 0 && faceIndex < faceCount)));
+                if (candidateFaceIndices.length > 0) {
+                    const resolvedFaces = resolvePreservedSurfaceSelectionFromCandidates(candidateFaceIndices, surfaceTopology, raycaster.ray.clone());
+                    const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
+                        candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+                    if (preservedCandidateFace != null) {
+                        onPaintFaces(selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved"), "design");
+                        lastPreservedFacesRef.current = [];
                         return;
                     }
-                    event.stopPropagation();
-                    event.nativeEvent.preventDefault();
-                    const faceIndex = event.faceIndex;
-                    if (faceIndex != null && faceIndex >= 0 && faceIndex < faceCount) {
-                        const label = event.button === 2 ? "design" : "preserved";
-                        onPaintFaces(resolvePreservedSurfaceSelection(faceIndex, surfaceTopology, event.ray.clone()), label);
-                    }
-                    return;
                 }
+            }
+            if (lastPreservedFacesRef.current.length > 0) {
+                onPaintFaces(lastPreservedFacesRef.current, "design");
+                lastPreservedFacesRef.current = [];
+            }
+        };
+        const maybeHandleSecondaryClick = (nativeEvent) => {
+            if (nativeEvent.button !== 2) {
+                return;
+            }
+            const now = Date.now();
+            if (now - lastHandledAt < 80) {
+                return;
+            }
+            lastHandledAt = now;
+            nativeEvent.preventDefault();
+            nativeEvent.stopPropagation();
+            clearPreservedAtClientPoint(nativeEvent.clientX, nativeEvent.clientY);
+        };
+        const handlePointerDown = (nativeEvent) => maybeHandleSecondaryClick(nativeEvent);
+        const handleMouseDown = (nativeEvent) => maybeHandleSecondaryClick(nativeEvent);
+        const handleAuxClick = (nativeEvent) => maybeHandleSecondaryClick(nativeEvent);
+        const handleContextMenu = (nativeEvent) => maybeHandleSecondaryClick(nativeEvent);
+        window.addEventListener("pointerdown", handlePointerDown, true);
+        window.addEventListener("mousedown", handleMouseDown, true);
+        window.addEventListener("auxclick", handleAuxClick, true);
+        window.addEventListener("contextmenu", handleContextMenu, true);
+        return () => {
+            window.removeEventListener("pointerdown", handlePointerDown, true);
+            window.removeEventListener("mousedown", handleMouseDown, true);
+            window.removeEventListener("auxclick", handleAuxClick, true);
+            window.removeEventListener("contextmenu", handleContextMenu, true);
+        };
+    }, [camera, faceCount, faceLabels, gl.domElement, onPaintFaces, paintLabel, placeForceMode, surfaceTopology]);
+    return (_jsx("mesh", { ref: meshRef, geometry: editableGeometry, onPointerDown: (event) => {
+            if (!placeForceMode && paintLabel) {
                 if (event.button !== 0) {
                     return;
                 }
@@ -150,12 +238,17 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
             if (isPainting) {
                 paint(event);
             }
-        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onContextMenu: (event) => {
-            if (paintLabel === "preserved") {
+        }, onPointerUp: () => setIsPainting(false), onPointerLeave: () => setIsPainting(false), onClick: (event) => {
+            if (placeForceMode) {
+                placeForce(event);
+                return;
+            }
+            if (paintLabel === "preserved" && event.button === 0) {
                 event.stopPropagation();
                 event.nativeEvent.preventDefault();
+                applyPreservedSelection(event, "preserved");
             }
-        }, onClick: placeForce, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
+        }, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
 }
 function ForceArrow({ force, selected, onSelect }) {
     const length = Math.min(Math.max(force.magnitude * 0.01, 0.08), 0.35);
@@ -186,13 +279,13 @@ function OutcomeOverlay({ object, wireframe }) {
                     material.roughness = 0.72;
                 }
                 else {
-                    material.color = new THREE.Color("#2f353d");
+                    material.color = new THREE.Color("#b6bac2");
                     material.transparent = false;
                     material.opacity = 1;
-                    material.metalness = 0.18;
-                    material.roughness = 0.62;
-                    material.emissive = new THREE.Color("#0f141b");
-                    material.emissiveIntensity = 0.03;
+                    material.metalness = 0.72;
+                    material.roughness = 0.34;
+                    material.emissive = new THREE.Color("#141820");
+                    material.emissiveIntensity = 0.02;
                 }
                 material.side = THREE.DoubleSide;
                 material.depthWrite = true;
@@ -207,6 +300,25 @@ function OutcomeOverlay({ object, wireframe }) {
 export function ViewerCanvas({ geometry, faceLabels, paintLabel, brushRadius, onPaintFaces, placeForceMode, onPlaceForce, forces, selectedForceId, onSelectForce, outcomeObject, showOriginal, showOutcomeOverlay, wireframe }) {
     const fitRootRef = useRef(null);
     const controlsRef = useRef(null);
-    const fitKey = `${geometry?.uuid ?? "no-geometry"}:${showOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${showOutcomeOverlay}`;
-    return (_jsx("div", { className: "viewer-shell", children: _jsxs(Canvas, { camera: { fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }, shadows: true, onPointerMissed: () => onSelectForce(null), children: [_jsx("color", { attach: "background", args: ["#081223"] }), _jsx("ambientLight", { intensity: 0.5 }), _jsx("directionalLight", { position: [2, 3, 2], intensity: 1.1, castShadow: true }), _jsxs("group", { ref: fitRootRef, onClick: () => onSelectForce(null), children: [geometry && showOriginal && (_jsx(EditablePart, { geometry: geometry, faceLabels: faceLabels, paintLabel: paintLabel, brushRadius: brushRadius, onPaintFaces: onPaintFaces, placeForceMode: placeForceMode, onPlaceForce: onPlaceForce })), outcomeObject && showOutcomeOverlay && (_jsx(OutcomeOverlay, { object: outcomeObject, wireframe: wireframe }))] }), forces.map((force) => (_jsx(ForceArrow, { force: force, selected: force.id === selectedForceId, onSelect: () => onSelectForce(force.id) }, force.id))), _jsx(CameraAutoFit, { fitRootRef: fitRootRef, controlsRef: controlsRef, fitKey: fitKey }), _jsx(Environment, { preset: "city" }), _jsx(OrbitControls, { ref: controlsRef, makeDefault: true, enableDamping: true, minDistance: 1e-5, maxDistance: 1e12, zoomSpeed: 1, panSpeed: 0.9 })] }) }));
+    const isEditing = Boolean(paintLabel) || placeForceMode;
+    const renderOriginal = Boolean(geometry) && (showOriginal || isEditing);
+    const renderOutcomeOverlay = Boolean(outcomeObject) && showOutcomeOverlay && !isEditing;
+    const fitKey = `${geometry?.uuid ?? "no-geometry"}:${renderOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${renderOutcomeOverlay}`;
+    return (_jsx("div", { className: "viewer-shell", children: _jsxs(Canvas, { camera: { fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }, shadows: true, onPointerMissed: () => onSelectForce(null), children: [_jsx("color", { attach: "background", args: ["#081223"] }), _jsx("ambientLight", { intensity: 0.5 }), _jsx("directionalLight", { position: [2, 3, 2], intensity: 1.1, castShadow: true }), _jsxs("group", { ref: fitRootRef, onClick: () => onSelectForce(null), children: [geometry && renderOriginal && (_jsx(EditablePart, { geometry: geometry, faceLabels: faceLabels, paintLabel: paintLabel, brushRadius: brushRadius, onPaintFaces: onPaintFaces, placeForceMode: placeForceMode, onPlaceForce: onPlaceForce })), outcomeObject && renderOutcomeOverlay && (_jsx(OutcomeOverlay, { object: outcomeObject, wireframe: wireframe }))] }), forces.map((force) => (_jsx(ForceArrow, { force: force, selected: force.id === selectedForceId, onSelect: () => onSelectForce(force.id) }, force.id))), _jsx(CameraAutoFit, { fitRootRef: fitRootRef, controlsRef: controlsRef, fitKey: fitKey }), _jsx(Environment, { preset: "city" }), _jsx(OrbitControls, { ref: controlsRef, makeDefault: true, enableDamping: true, minDistance: 1e-5, maxDistance: 1e12, zoomSpeed: 1, panSpeed: 0.9, mouseButtons: placeForceMode || paintLabel === "preserved"
+                        ? {
+                            LEFT: THREE.MOUSE.ROTATE,
+                            MIDDLE: THREE.MOUSE.DOLLY,
+                            RIGHT: paintLabel === "preserved" ? DISABLED_MOUSE_BUTTON : THREE.MOUSE.PAN
+                        }
+                        : isEditing
+                            ? {
+                                LEFT: DISABLED_MOUSE_BUTTON,
+                                MIDDLE: THREE.MOUSE.DOLLY,
+                                RIGHT: THREE.MOUSE.PAN
+                            }
+                            : {
+                                LEFT: THREE.MOUSE.ROTATE,
+                                MIDDLE: THREE.MOUSE.DOLLY,
+                                RIGHT: THREE.MOUSE.PAN
+                            } })] }) }));
 }

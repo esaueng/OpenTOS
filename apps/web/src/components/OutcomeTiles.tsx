@@ -33,12 +33,12 @@ function Thumbnail({ base64 }: { base64: string }) {
         material.metalness = 0.08;
         material.roughness = 0.72;
       } else {
-        material.color = new THREE.Color("#2e3a46");
+        material.color = new THREE.Color("#b6bac2");
         material.opacity = 1;
-        material.metalness = 0.5;
-        material.roughness = 0.44;
-        material.emissive = new THREE.Color("#10161f");
-        material.emissiveIntensity = 0.08;
+        material.metalness = 0.72;
+        material.roughness = 0.34;
+        material.emissive = new THREE.Color("#141820");
+        material.emissiveIntensity = 0.03;
       }
       material.side = THREE.DoubleSide;
       material.needsUpdate = true;

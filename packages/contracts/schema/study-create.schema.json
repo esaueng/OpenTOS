@@ -156,7 +156,15 @@
     },
     "material": {
       "type": "string",
-      "enum": ["Aluminum 6061"]
+      "enum": [
+        "Aluminum 6061",
+        "PLA",
+        "PETG",
+        "ABS",
+        "ASA",
+        "Nylon (PA12)",
+        "Polycarbonate (PC)"
+      ]
     },
     "targets": {
       "type": "object",
