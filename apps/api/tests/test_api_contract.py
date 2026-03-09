@@ -32,7 +32,7 @@ def _request_body() -> dict:
             {
                 "id": "LC-1",
                 "fixedRegions": ["mountA"],
-                "forces": [{"point": [1, 1, 1], "direction": [1, 0, 0], "magnitude": 10, "unit": "lb"}],
+                "forces": [{"point": [1, 1, 1], "direction": [1, 0, 0], "magnitude": 10, "unit": "lb", "label": "F-1"}],
             }
         ],
         "material": "Aluminum 6061",
@@ -116,7 +116,7 @@ class FakeManager:
                     {
                         "id": "LC-1",
                         "fixedRegions": ["mountA"],
-                        "forces": [{"point": [0, 0, 0], "direction": [1, 0, 0], "magnitude": 10, "unit": "lb"}],
+                        "forces": [{"point": [0, 0, 0], "direction": [1, 0, 0], "magnitude": 10, "unit": "lb", "label": "F-1"}],
                     }
                 ],
                 "material": "Aluminum 6061",
@@ -136,7 +136,14 @@ def test_materials_endpoint() -> None:
         response = client.get("/api/materials")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["materials"][0]["name"] == "Aluminum 6061"
+        names = [material["name"] for material in payload["materials"]]
+        assert "Aluminum 6061" in names
+        assert "PLA" in names
+        assert "PETG" in names
+        assert "ABS" in names
+        assert "ASA" in names
+        assert "Nylon (PA12)" in names
+        assert "Polycarbonate (PC)" in names
 
 
 def test_study_create_get_run_and_job_contracts() -> None:

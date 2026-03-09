@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OutcomeTiles } from "./components/OutcomeTiles";
 import { ViewerCanvas } from "./components/ViewerCanvas";
 import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
+import { MATERIAL_OPTIONS } from "./materials";
 import {
   applyFaceLabels,
   buildSolvePayload,
@@ -145,6 +146,8 @@ export default function App() {
         if (payload.status === "succeeded") {
           setOutcomes(payload.outcomes ?? []);
           setSelectedOutcomeId(payload.outcomes?.[0]?.id ?? null);
+          setShowOriginal(true);
+          setShowOutcomeOverlay(true);
           setJobId(null);
         }
 
@@ -297,6 +300,8 @@ export default function App() {
     setSelectedOutcomeObject(null);
     setWorkerWarnings([]);
     setIsSubmittingStudy(true);
+    setPaintLabel(null);
+    setPlaceForceMode(false);
 
     try {
       const payload = buildSolvePayload({
@@ -402,6 +407,8 @@ export default function App() {
         setOutcomes(localResult.outcomes);
         setSelectedOutcomeId(localResult.outcomes[0]?.id ?? null);
         setWorkerWarnings(localResult.warnings);
+        setShowOriginal(true);
+        setShowOutcomeOverlay(true);
         setJobStatus((current) =>
           current
             ? {
@@ -687,8 +694,20 @@ export default function App() {
           <h2>4. Study Setup</h2>
           <label>
             Material
-            <select value={settings.material} onChange={() => undefined}>
-              <option value="Aluminum 6061">Aluminum 6061</option>
+            <select
+              value={settings.material}
+              onChange={(event) =>
+                setSettings((curr) => ({
+                  ...curr,
+                  material: event.target.value as StudySettings["material"]
+                }))
+              }
+            >
+              {MATERIAL_OPTIONS.map((materialName) => (
+                <option key={materialName} value={materialName}>
+                  {materialName}
+                </option>
+              ))}
             </select>
           </label>
           <label>

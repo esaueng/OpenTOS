@@ -31,11 +31,11 @@ export async function exportOutcomeGlb(
   const generated = new THREE.Mesh(
     generatedGeometry,
     new THREE.MeshStandardMaterial({
-      color: 0x2f353d,
-      metalness: 0.55,
-      roughness: 0.38,
-      emissive: 0x0a1017,
-      emissiveIntensity: 0.06
+      color: 0xb6bac2,
+      metalness: 0.72,
+      roughness: 0.34,
+      emissive: 0x12161d,
+      emissiveIntensity: 0.03
     })
   );
   generated.name = "generated";

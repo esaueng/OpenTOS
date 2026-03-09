@@ -2,6 +2,14 @@ export type DistanceUnit = "mm" | "in" | "m";
 export type ForceUnit = "N" | "lb";
 export type ModelFormat = "stl" | "obj" | "glb";
 export type QualityProfile = "high-fidelity" | "balanced" | "fast-preview";
+export type MaterialName =
+  | "Aluminum 6061"
+  | "PLA"
+  | "PETG"
+  | "ABS"
+  | "ASA"
+  | "Nylon (PA12)"
+  | "Polycarbonate (PC)";
 
 export type JobStateV2 = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type JobStageV2 =
@@ -63,7 +71,7 @@ export interface StudyCreateRequest {
   preservedRegions: FaceRegion[];
   obstacleRegions: FaceRegion[];
   loadCases: LoadCase[];
-  material: "Aluminum 6061";
+  material: MaterialName;
   targets: RunTargets;
 }
 

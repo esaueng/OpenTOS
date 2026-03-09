@@ -5,6 +5,16 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+MATERIAL_NAMES = (
+    "Aluminum 6061",
+    "PLA",
+    "PETG",
+    "ABS",
+    "ASA",
+    "Nylon (PA12)",
+    "Polycarbonate (PC)",
+)
+
 
 class EncodedModel(BaseModel):
     format: Literal["stl", "obj", "glb"]
@@ -61,7 +71,15 @@ class StudyCreateRequest(BaseModel):
     preservedRegions: list[FaceRegion] = Field(min_length=1)
     obstacleRegions: list[FaceRegion] = Field(default_factory=list)
     loadCases: list[LoadCase] = Field(min_length=1)
-    material: Literal["Aluminum 6061"]
+    material: Literal[
+        "Aluminum 6061",
+        "PLA",
+        "PETG",
+        "ABS",
+        "ASA",
+        "Nylon (PA12)",
+        "Polycarbonate (PC)",
+    ]
     targets: RunTargets
 
 

@@ -4,9 +4,9 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
   "high-fidelity": {
     id: "high-fidelity",
     targetVoxels: 3_200_000,
-    minThicknessVoxels: 2,
+    minThicknessVoxels: 1,
     smoothIterations: 4,
-    taubinIterations: 18,
+    taubinIterations: 12,
     densityIterations: 30,
     connectivityIterations: 16,
     maxTriangles: 260_000
@@ -14,9 +14,9 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
   balanced: {
     id: "balanced",
     targetVoxels: 1_500_000,
-    minThicknessVoxels: 2,
+    minThicknessVoxels: 1,
     smoothIterations: 3,
-    taubinIterations: 13,
+    taubinIterations: 9,
     densityIterations: 22,
     connectivityIterations: 11,
     maxTriangles: 170_000

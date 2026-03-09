@@ -18,23 +18,114 @@ export function faceCountFromPositions(positions: Float32Array): number {
   return Math.floor(positions.length / 9);
 }
 
-export function getPreservedData(request: StudyCreateRequest, totalFaces: number): PreservedData {
-  const allFaces = new Set<number>();
-  const groups: number[][] = [];
+function quantizedVertexKey(x: number, y: number, z: number): string {
+  const q = 1e5;
+  return `${Math.round(x * q)}:${Math.round(y * q)}:${Math.round(z * q)}`;
+}
 
-  for (const region of request.preservedRegions) {
-    const group: number[] = [];
-    for (const idx of region.faceIndices) {
-      if (idx >= 0 && idx < totalFaces) {
-        allFaces.add(idx);
-        group.push(idx);
+function splitPreservedGroups(positions: Float32Array, preservedFaces: number[]): number[][] {
+  const faceSet = new Set(preservedFaces);
+  const adjacency = new Map<number, number[]>();
+  const edgeMap = new Map<string, number[]>();
+  const normals = new Map<number, THREE.Vector3>();
+
+  for (const faceIndex of preservedFaces) {
+    adjacency.set(faceIndex, []);
+    const [a, b, c] = triangleAtFace(positions, faceIndex);
+    const ab = new THREE.Vector3().subVectors(b, a);
+    const ac = new THREE.Vector3().subVectors(c, a);
+    const normal = new THREE.Vector3().crossVectors(ab, ac);
+    normals.set(faceIndex, normal.lengthSq() > 1e-12 ? normal.normalize() : new THREE.Vector3(0, 0, 1));
+    const keys = [
+      quantizedVertexKey(a.x, a.y, a.z),
+      quantizedVertexKey(b.x, b.y, b.z),
+      quantizedVertexKey(c.x, c.y, c.z)
+    ] as const;
+    const edges: [string, string][] = [
+      [keys[0], keys[1]],
+      [keys[1], keys[2]],
+      [keys[2], keys[0]]
+    ];
+    for (const [u, v] of edges) {
+      const edgeKey = u < v ? `${u}|${v}` : `${v}|${u}`;
+      const faces = edgeMap.get(edgeKey);
+      if (faces) {
+        faces.push(faceIndex);
+      } else {
+        edgeMap.set(edgeKey, [faceIndex]);
       }
-    }
-    if (group.length > 0) {
-      groups.push(group);
     }
   }
 
+  edgeMap.forEach((faces) => {
+    if (faces.length < 2) {
+      return;
+    }
+    for (let i = 0; i < faces.length; i += 1) {
+      for (let j = i + 1; j < faces.length; j += 1) {
+        const left = faces[i];
+        const right = faces[j];
+        if (!faceSet.has(left) || !faceSet.has(right)) {
+          continue;
+        }
+        adjacency.get(left)?.push(right);
+        adjacency.get(right)?.push(left);
+      }
+    }
+  });
+
+  const visited = new Set<number>();
+  const groups: number[][] = [];
+  const cosineThreshold = Math.cos(THREE.MathUtils.degToRad(38));
+
+  for (const seed of preservedFaces) {
+    if (visited.has(seed)) {
+      continue;
+    }
+    const queue = [seed];
+    const group: number[] = [];
+    visited.add(seed);
+
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      group.push(current);
+      const currentNormal = normals.get(current) ?? new THREE.Vector3(0, 0, 1);
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) {
+          continue;
+        }
+        const nextNormal = normals.get(next) ?? new THREE.Vector3(0, 0, 1);
+        if (currentNormal.dot(nextNormal) >= cosineThreshold) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+
+    if (group.length > 0) {
+      groups.push(group.sort((a, b) => a - b));
+    }
+  }
+
+  return groups;
+}
+
+export function getPreservedData(request: StudyCreateRequest, totalFaces: number, positions?: Float32Array): PreservedData {
+  const allFaces = new Set<number>();
+  const rawFaces: number[] = [];
+
+  for (const region of request.preservedRegions) {
+    for (const idx of region.faceIndices) {
+      if (idx >= 0 && idx < totalFaces) {
+        if (!allFaces.has(idx)) {
+          rawFaces.push(idx);
+          allFaces.add(idx);
+        }
+      }
+    }
+  }
+
+  const groups = positions ? splitPreservedGroups(positions, rawFaces) : rawFaces.length ? [rawFaces] : [];
   return { allFaces, groups };
 }
 

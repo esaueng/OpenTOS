@@ -15,6 +15,26 @@ function polygonArea(points) {
     }
     return sum * 0.5;
 }
+function pointOnSegment(point, start, end, epsilon) {
+    const sx = end[0] - start[0];
+    const sy = end[1] - start[1];
+    const segLen2 = sx * sx + sy * sy;
+    if (segLen2 <= 1e-12) {
+        return Math.hypot(point[0] - start[0], point[1] - start[1]) <= epsilon;
+    }
+    const t = Math.max(0, Math.min(1, ((point[0] - start[0]) * sx + (point[1] - start[1]) * sy) / segLen2));
+    const qx = start[0] + sx * t;
+    const qy = start[1] + sy * t;
+    return Math.hypot(point[0] - qx, point[1] - qy) <= epsilon;
+}
+function pointOnPolygonEdge(point, polygon, epsilon) {
+    for (let i = 0; i < polygon.length; i += 1) {
+        if (pointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.length], epsilon)) {
+            return true;
+        }
+    }
+    return false;
+}
 function pointInPolygon(point, polygon) {
     let windingNumber = 0;
     for (let i = 0; i < polygon.length; i += 1) {
@@ -41,6 +61,15 @@ function averageSurfaceNormal(topology, faces) {
         return new THREE.Vector3(0, 0, 1);
     }
     return normal.normalize();
+}
+function isMostlyPlanarSurface(topology, faces) {
+    const normal = averageSurfaceNormal(topology, faces);
+    const planarThreshold = Math.cos(THREE.MathUtils.degToRad(18));
+    const planarFaces = faces.filter((faceIndex) => Math.abs(topology.faceNormals[faceIndex].dot(normal)) >= planarThreshold);
+    return {
+        normal,
+        mostlyPlanar: planarFaces.length >= Math.max(6, Math.floor(faces.length * 0.85))
+    };
 }
 function buildProjectionBasis(normal) {
     const reference = Math.abs(normal.z) < 0.82 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
@@ -136,12 +165,52 @@ function computeBoundaryLoops(topology, surfaceFaces) {
     }
     return loops;
 }
+function collectLoopBoundaryFaces(loop, baseSurfaceSet, topology) {
+    const boundaryFaces = new Set();
+    for (const edgeKey of loop.edgeKeys) {
+        const faces = topology.edgeFaces.get(edgeKey) ?? [];
+        for (const faceIndex of faces) {
+            if (baseSurfaceSet.has(faceIndex)) {
+                boundaryFaces.add(faceIndex);
+            }
+        }
+    }
+    return Array.from(boundaryFaces);
+}
+function minSurfaceHops(startFaceIndex, targetFaces, allowedFaces, topology) {
+    if (targetFaces.length === 0 || !allowedFaces.has(startFaceIndex)) {
+        return Number.POSITIVE_INFINITY;
+    }
+    const targetSet = new Set(targetFaces);
+    if (targetSet.has(startFaceIndex)) {
+        return 0;
+    }
+    const visited = new Uint8Array(topology.faceNormals.length);
+    const queue = [{ faceIndex: startFaceIndex, hops: 0 }];
+    visited[startFaceIndex] = 1;
+    while (queue.length > 0) {
+        const current = queue.shift();
+        for (const next of topology.adjacency[current.faceIndex]) {
+            if (visited[next] || !allowedFaces.has(next)) {
+                continue;
+            }
+            const nextHops = current.hops + 1;
+            if (targetSet.has(next)) {
+                return nextHops;
+            }
+            visited[next] = 1;
+            queue.push({ faceIndex: next, hops: nextHops });
+        }
+    }
+    return Number.POSITIVE_INFINITY;
+}
 export function buildSurfaceTopology(geometry) {
     const position = geometry.getAttribute("position");
     const faceCount = position.count / 3;
     const faceCenters = [];
     const faceNormals = Array.from({ length: faceCount }, () => new THREE.Vector3(0, 0, 1));
     const adjacency = Array.from({ length: faceCount }, () => []);
+    const faceEdgeKeys = Array.from({ length: faceCount }, () => []);
     const edgeFaces = new Map();
     const edgeVertices = new Map();
     const vertexPositions = new Map();
@@ -180,6 +249,7 @@ export function buildSurfaceTopology(geometry) {
         ];
         for (const [u, v] of edges) {
             const edgeKey = edgeKeyFor(u, v);
+            faceEdgeKeys[faceIndex].push(edgeKey);
             if (!edgeVertices.has(edgeKey)) {
                 edgeVertices.set(edgeKey, u < v ? [u, v] : [v, u]);
             }
@@ -209,6 +279,7 @@ export function buildSurfaceTopology(geometry) {
         faceCenters,
         faceNormals,
         adjacency,
+        faceEdgeKeys,
         edgeFaces,
         edgeVertices,
         vertexPositions
@@ -239,38 +310,72 @@ export function selectContiguousSurface(startFaceIndex, topology, maxNormalAngle
     }
     return selected;
 }
-export function resolvePreservedSurfaceSelection(startFaceIndex, topology, ray) {
-    const baseSurface = selectContiguousSurface(startFaceIndex, topology);
-    if (baseSurface.length === 0) {
-        return baseSurface;
+export function selectConnectedLabeledFaces(startFaceIndex, topology, faceLabels, targetLabel) {
+    if (startFaceIndex < 0 ||
+        startFaceIndex >= topology.faceNormals.length ||
+        faceLabels[startFaceIndex] !== targetLabel) {
+        return [];
     }
-    const surfaceNormal = averageSurfaceNormal(topology, baseSurface);
-    const planarThreshold = Math.cos(THREE.MathUtils.degToRad(18));
-    const planarFaces = baseSurface.filter((faceIndex) => Math.abs(topology.faceNormals[faceIndex].dot(surfaceNormal)) >= planarThreshold);
-    if (planarFaces.length < Math.max(6, Math.floor(baseSurface.length * 0.85))) {
-        return baseSurface;
+    const visited = new Uint8Array(topology.faceNormals.length);
+    const queue = [startFaceIndex];
+    const selected = [];
+    visited[startFaceIndex] = 1;
+    while (queue.length > 0) {
+        const current = queue.pop();
+        selected.push(current);
+        for (const next of topology.adjacency[current]) {
+            if (visited[next] || faceLabels[next] !== targetLabel) {
+                continue;
+            }
+            visited[next] = 1;
+            queue.push(next);
+        }
+    }
+    return selected;
+}
+function redirectHoleSurfaceSelection(startFaceIndex, baseSurface, topology, ray) {
+    const { normal: surfaceNormal, mostlyPlanar } = isMostlyPlanarSurface(topology, baseSurface);
+    if (!mostlyPlanar) {
+        return null;
     }
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(surfaceNormal, topology.faceCenters[startFaceIndex]);
     const planeHit = ray.intersectPlane(plane, new THREE.Vector3());
     if (!planeHit) {
-        return baseSurface;
+        return null;
     }
     const loops = computeBoundaryLoops(topology, baseSurface);
     if (loops.length < 2) {
-        return baseSurface;
+        return null;
     }
     const largestArea = Math.max(...loops.map((loop) => loop.areaAbs));
+    const innerLoops = loops.filter((loop) => loop.areaAbs < largestArea * 0.98);
+    if (innerLoops.length === 0) {
+        return null;
+    }
     const { u, v } = buildProjectionBasis(surfaceNormal);
     const planeOrigin = topology.faceCenters[startFaceIndex];
     const delta = planeHit.clone().sub(planeOrigin);
     const projectedPoint = [delta.dot(u), delta.dot(v)];
-    const holeLoop = loops
-        .filter((loop) => loop.areaAbs < largestArea * 0.98 && pointInPolygon(projectedPoint, loop.points2d))
+    const baseSurfaceSet = new Set(baseSurface);
+    let holeLoop = innerLoops
+        .filter((loop) => (pointOnPolygonEdge(projectedPoint, loop.points2d, 0.012) || pointInPolygon(projectedPoint, loop.points2d)))
         .sort((left, right) => left.areaAbs - right.areaAbs)[0];
     if (!holeLoop) {
-        return baseSurface;
+        let bestLoop = null;
+        let bestHops = Number.POSITIVE_INFINITY;
+        for (const candidateLoop of innerLoops) {
+            const boundaryFaces = collectLoopBoundaryFaces(candidateLoop, baseSurfaceSet, topology);
+            const hops = minSurfaceHops(startFaceIndex, boundaryFaces, baseSurfaceSet, topology);
+            if (hops < bestHops) {
+                bestHops = hops;
+                bestLoop = candidateLoop;
+            }
+        }
+        if (!bestLoop || !Number.isFinite(bestHops) || bestHops > 6) {
+            return null;
+        }
+        holeLoop = bestLoop;
     }
-    const baseSurfaceSet = new Set(baseSurface);
     const sidewallSeeds = new Set();
     for (const edgeKey of holeLoop.edgeKeys) {
         const faces = topology.edgeFaces.get(edgeKey) ?? [];
@@ -286,7 +391,7 @@ export function resolvePreservedSurfaceSelection(startFaceIndex, topology, ray) 
         }
     }
     if (sidewallSeeds.size === 0) {
-        return baseSurface;
+        return null;
     }
     const queue = Array.from(sidewallSeeds);
     const visited = new Uint8Array(topology.faceNormals.length);
@@ -308,5 +413,36 @@ export function resolvePreservedSurfaceSelection(startFaceIndex, topology, ray) 
             queue.push(next);
         }
     }
-    return redirectedSurface.length > 0 ? redirectedSurface : baseSurface;
+    return redirectedSurface.length > 0 ? redirectedSurface : null;
+}
+export function resolvePreservedSurfaceSelectionFromCandidates(candidateFaceIndices, topology, ray) {
+    const orderedCandidates = Array.from(new Set(candidateFaceIndices)).filter((faceIndex) => faceIndex >= 0 && faceIndex < topology.faceNormals.length);
+    if (orderedCandidates.length === 0) {
+        return [];
+    }
+    const primaryBaseSurface = selectContiguousSurface(orderedCandidates[0], topology);
+    if (primaryBaseSurface.length === 0) {
+        return primaryBaseSurface;
+    }
+    let curvedFallback = null;
+    for (const candidateFace of orderedCandidates) {
+        const baseSurface = selectContiguousSurface(candidateFace, topology);
+        if (baseSurface.length === 0) {
+            continue;
+        }
+        const candidateShape = isMostlyPlanarSurface(topology, baseSurface);
+        if (candidateShape.mostlyPlanar) {
+            const redirectedSurface = redirectHoleSurfaceSelection(candidateFace, baseSurface, topology, ray);
+            if (redirectedSurface && redirectedSurface.length > 0) {
+                return redirectedSurface;
+            }
+        }
+        else if (!curvedFallback || baseSurface.length > curvedFallback.length) {
+            curvedFallback = baseSurface;
+        }
+    }
+    return curvedFallback ?? primaryBaseSurface;
+}
+export function resolvePreservedSurfaceSelection(startFaceIndex, topology, ray) {
+    return resolvePreservedSurfaceSelectionFromCandidates([startFaceIndex], topology, ray);
 }

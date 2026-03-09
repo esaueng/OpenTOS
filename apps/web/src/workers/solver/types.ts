@@ -103,6 +103,11 @@ export interface DensitySolveResult {
   volumeFraction: number;
 }
 
+export interface PreservedTarget {
+  point: [number, number, number];
+  weight: number;
+}
+
 export interface VariantResult {
   id: string;
   density: Float32Array;

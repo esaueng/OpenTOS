@@ -34,7 +34,7 @@ def test_normalization_converts_units_forces_and_constraints() -> None:
                 "forces": [{"point": [0, 0, 0], "direction": [0, 0, -1], "magnitude": 10, "unit": "lb"}],
             }
         ],
-        material="Aluminum 6061",
+        material="PETG",
         targets={"safetyFactor": 2.0, "outcomeCount": 4, "massReductionGoalPct": 45.0},
     )
 
