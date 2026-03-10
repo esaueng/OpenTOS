@@ -400,15 +400,37 @@ function EditablePart({
 
 function ForceArrow({
   force,
+  scale,
   selected,
   onSelect
 }: {
   force: ForceState;
+  scale: number;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const length = Math.min(Math.max(force.magnitude * 0.01, 0.08), 0.35);
   const direction = useMemo(() => new THREE.Vector3(...force.direction).normalize(), [force.direction]);
+  const surfaceNormal = useMemo(() => {
+    const normal = new THREE.Vector3(...force.normal);
+    if (normal.lengthSq() <= 1e-12) {
+      return direction.clone();
+    }
+    return normal.normalize();
+  }, [direction, force.normal]);
+  const length = Math.max(scale * 0.12, Math.min(scale * 0.24, scale * (0.1 + Math.log10(force.magnitude + 1) * 0.045)));
+  const shaftRadius = Math.max(scale * 0.006, length * 0.055);
+  const coneRadius = shaftRadius * 2.4;
+  const coneLength = length * 0.24;
+  const contactRadius = shaftRadius * 1.2;
+  const guideRadius = shaftRadius * 0.35;
+  const contactGap = Math.max(scale * 0.01, shaftRadius * 1.4);
+  const pointingAwayFromSurface = direction.dot(surfaceNormal) >= 0;
+  const rootOffset = pointingAwayFromSurface ? contactGap : length + contactGap;
+  const rootPosition = useMemo(
+    () => new THREE.Vector3(...force.point).addScaledVector(surfaceNormal, rootOffset),
+    [force.point, rootOffset, surfaceNormal]
+  );
+  const guideLength = Math.max(rootOffset - contactGap, 0);
   const quaternion = useMemo(() => {
     const q = new THREE.Quaternion();
     q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
@@ -417,22 +439,52 @@ function ForceArrow({
 
   return (
     <group
-      position={new THREE.Vector3(...force.point)}
+      position={rootPosition}
       quaternion={quaternion}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();
       }}
     >
-      <mesh position={[0, length * 0.45, 0]}>
-        <cylinderGeometry args={[0.005, 0.005, length * 0.9, 8]} />
-        <meshStandardMaterial color={selected ? "#ffd166" : "#ef476f"} emissive={selected ? "#553100" : "#2f0d16"} />
+      {guideLength > 1e-6 && (
+        <mesh position={[0, -guideLength * 0.5, 0]}>
+          <cylinderGeometry args={[guideRadius, guideRadius, guideLength, 10]} />
+          <meshStandardMaterial
+            color={selected ? "#ffd166" : "#f59e0b"}
+            emissive={selected ? "#694900" : "#3c1700"}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
+      <mesh position={[0, -guideLength, 0]}>
+        <sphereGeometry args={[contactRadius, 14, 14]} />
+        <meshStandardMaterial
+          color={selected ? "#ffe29a" : "#ffd166"}
+          emissive={selected ? "#6b4d00" : "#4b2d00"}
+          depthTest={false}
+          depthWrite={false}
+        />
       </mesh>
-      <mesh position={[0, length * 0.95, 0]}>
-        <coneGeometry args={[0.016, length * 0.2, 10]} />
-        <meshStandardMaterial color={selected ? "#ffd166" : "#ef476f"} emissive={selected ? "#553100" : "#2f0d16"} />
+      <mesh position={[0, length * 0.42, 0]}>
+        <cylinderGeometry args={[shaftRadius, shaftRadius, length * 0.84, 12]} />
+        <meshStandardMaterial
+          color={selected ? "#ffd166" : "#ef476f"}
+          emissive={selected ? "#553100" : "#2f0d16"}
+          depthTest={false}
+          depthWrite={false}
+        />
       </mesh>
-      <Html position={[0, length * 1.15, 0]} center>
+      <mesh position={[0, length * 0.84 + coneLength * 0.5, 0]}>
+        <coneGeometry args={[coneRadius, coneLength, 14]} />
+        <meshStandardMaterial
+          color={selected ? "#ffd166" : "#ef476f"}
+          emissive={selected ? "#553100" : "#2f0d16"}
+          depthTest={false}
+          depthWrite={false}
+        />
+      </mesh>
+      <Html position={[0, length + coneLength + scale * 0.025, 0]} center>
         <span className="force-label">{force.label}</span>
       </Html>
     </group>
@@ -499,6 +551,25 @@ export function ViewerCanvas({
   const renderOriginal = Boolean(geometry) && (showOriginal || isEditing);
   const renderOutcomeOverlay = Boolean(outcomeObject) && showOutcomeOverlay && !isEditing;
   const fitKey = `${geometry?.uuid ?? "no-geometry"}:${renderOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${renderOutcomeOverlay}`;
+  const forceScale = useMemo(() => {
+    const box = new THREE.Box3();
+    if (geometry) {
+      if (!geometry.boundingBox) {
+        geometry.computeBoundingBox();
+      }
+      if (geometry.boundingBox) {
+        box.copy(geometry.boundingBox);
+      }
+    } else if (outcomeObject) {
+      outcomeObject.updateWorldMatrix(true, true);
+      box.setFromObject(outcomeObject);
+    }
+    if (box.isEmpty()) {
+      return 1;
+    }
+    const size = box.getSize(new THREE.Vector3());
+    return Math.max(size.length(), 0.25);
+  }, [geometry, outcomeObject]);
 
   return (
     <div className="viewer-shell">
@@ -526,6 +597,7 @@ export function ViewerCanvas({
           <ForceArrow
             key={force.id}
             force={force}
+            scale={forceScale}
             selected={force.id === selectedForceId}
             onSelect={() => onSelectForce(force.id)}
           />
