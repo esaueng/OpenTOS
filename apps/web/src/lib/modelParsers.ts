@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 import type { UploadedModel } from "../types";
 
@@ -14,15 +15,30 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function findFirstMesh(object: THREE.Object3D): THREE.Mesh | null {
-  let found: THREE.Mesh | null = null;
+function collectMergedSceneGeometry(object: THREE.Object3D): THREE.BufferGeometry | null {
+  const geometries: THREE.BufferGeometry[] = [];
+  object.updateWorldMatrix(true, true);
+
   object.traverse((child) => {
-    if (found || !(child instanceof THREE.Mesh) || !(child.geometry instanceof THREE.BufferGeometry)) {
+    if (!(child instanceof THREE.Mesh) || !(child.geometry instanceof THREE.BufferGeometry)) {
       return;
     }
-    found = child;
+
+    const geometry = child.geometry.clone();
+    geometry.applyMatrix4(child.matrixWorld);
+    const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+    flat.deleteAttribute("normal");
+    geometries.push(flat);
   });
-  return found;
+
+  if (geometries.length === 0) {
+    return null;
+  }
+  if (geometries.length === 1) {
+    return geometries[0];
+  }
+
+  return BufferGeometryUtils.mergeGeometries(geometries, false) ?? null;
 }
 
 function toSolveGeometry(input: THREE.BufferGeometry): THREE.BufferGeometry {
@@ -87,22 +103,22 @@ export async function parseModelFile(file: File): Promise<UploadedModel> {
     const text = new TextDecoder().decode(buffer);
     const loader = new OBJLoader();
     const object = loader.parse(text);
-    const mesh = findFirstMesh(object);
-    if (!mesh) {
+    const geometry = collectMergedSceneGeometry(object);
+    if (!geometry) {
       throw new Error("OBJ file did not contain mesh geometry");
     }
 
-    return asUploadedModel(file, format, base64, mesh.geometry);
+    return asUploadedModel(file, format, base64, geometry);
   }
 
   const loader = new GLTFLoader();
   const gltf = await loader.parseAsync(buffer, "");
-  const mesh = findFirstMesh(gltf.scene);
-  if (!mesh) {
+  const geometry = collectMergedSceneGeometry(gltf.scene);
+  if (!geometry) {
     throw new Error("GLB file did not contain mesh geometry");
   }
 
-  return asUploadedModel(file, format, base64, mesh.geometry);
+  return asUploadedModel(file, format, base64, geometry);
 }
 
 export async function parseGlbFromBase64(base64: string): Promise<THREE.Object3D> {

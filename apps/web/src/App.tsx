@@ -9,6 +9,7 @@ import { MATERIAL_OPTIONS } from "./materials";
 import {
   applyFaceLabels,
   buildSolvePayload,
+  getFixedFaceIndices,
   getObstacleFaceIndices,
   getPreservedFaceIndices,
   initializeFaceLabels
@@ -210,6 +211,7 @@ export default function App() {
   }, [model, outcomes, selectedOutcomeId]);
 
   const preservedCount = useMemo(() => getPreservedFaceIndices(faceLabels).length, [faceLabels]);
+  const fixedCount = useMemo(() => getFixedFaceIndices(faceLabels).length, [faceLabels]);
   const obstacleCount = useMemo(() => getObstacleFaceIndices(faceLabels).length, [faceLabels]);
 
   const onUploadFile = async (file: File) => {
@@ -284,8 +286,13 @@ export default function App() {
       return;
     }
 
-    if (preservedCount === 0) {
-      setError("Mark at least one preserved region before solve.");
+    if (preservedCount + fixedCount === 0) {
+      setError("Mark at least one preserved or fixed region before solve.");
+      return;
+    }
+
+    if (fixedCount === 0) {
+      setError("Mark at least one fixed region before solve.");
       return;
     }
 
@@ -304,9 +311,9 @@ export default function App() {
     setPlaceForceMode(false);
 
     try {
-      const payload = buildSolvePayload({
-        model,
-        units: settings.units,
+        const payload = buildSolvePayload({
+          model,
+          units: settings.units,
         faceLabels,
         forces,
         material: settings.material,
@@ -542,6 +549,16 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={paintLabel === "fixed" ? "is-active" : ""}
+              onClick={() => {
+                setPaintLabel("fixed");
+                setPlaceForceMode(false);
+              }}
+            >
+              Select Fixed Surface
+            </button>
+            <button
+              type="button"
               className={paintLabel === "design" ? "is-active" : ""}
               onClick={() => {
                 setPaintLabel("design");
@@ -573,9 +590,10 @@ export default function App() {
             />
           </label>
           <p className="small-note">
-            Preserved mode: left-click to keep geometry, right-click to clear it back to design.
+            Preserved and fixed modes: left-click to keep a contiguous interface surface, right-click to clear it back to design.
           </p>
           <p className="small-note">Preserved faces: {preservedCount}</p>
+          <p className="small-note">Fixed faces: {fixedCount}</p>
           <p className="small-note">Obstacle faces: {obstacleCount}</p>
         </section>
 
@@ -765,7 +783,7 @@ export default function App() {
             {isSubmittingStudy || jobId ? "Starting Study..." : "Run Generative Study"}
           </button>
           <p className="small-note run-hint">
-            Required: model upload, at least 1 preserved face, and at least 1 force.
+            Required: model upload, at least 1 fixed face, at least 1 preserved-or-fixed face, and at least 1 force.
           </p>
           <p className="small-note run-hint">
             Solver mode: {isBrowserSolver ? "Browser (local compute)" : "API (remote compute)"}

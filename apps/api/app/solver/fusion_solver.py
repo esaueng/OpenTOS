@@ -24,6 +24,13 @@ class VariantParams:
     void_bias: float
 
 
+@dataclass
+class PreservedTarget:
+    id: str
+    point: np.ndarray
+    weight: float
+
+
 def _choose_pitch(mesh: trimesh.Trimesh) -> float:
     max_extent = float(np.max(mesh.extents))
     min_extent = float(np.min(mesh.extents))
@@ -163,6 +170,126 @@ def _safe_volume(mesh: trimesh.Trimesh) -> float:
     return abs(volume)
 
 
+def _point_distance_sq(a: np.ndarray, b: np.ndarray) -> float:
+    delta = a - b
+    return float(np.dot(delta, delta))
+
+
+def _build_preserved_targets(study: NormalizedStudyInputV2, mesh: trimesh.Trimesh) -> list[PreservedTarget]:
+    targets: list[PreservedTarget] = []
+    for region_id, face_indices in study.preserved_region_faces.items():
+        if face_indices.size == 0:
+            continue
+        centers = mesh.triangles_center[face_indices]
+        if centers.size == 0:
+            continue
+        targets.append(
+            PreservedTarget(
+                id=region_id,
+                point=np.asarray(centers.mean(axis=0), dtype=np.float64),
+                weight=float(np.clip(np.sqrt(float(face_indices.size)) * 0.14, 0.6, 1.8)),
+            )
+        )
+    return targets
+
+
+def _build_connection_segments(
+    preserved_targets: list[PreservedTarget],
+    forces: list[Any],
+) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    segments: list[tuple[np.ndarray, np.ndarray, float]] = []
+    pair_keys: set[tuple[int, int]] = set()
+
+    for i in range(len(preserved_targets)):
+        nearest = sorted(
+            (
+                {
+                    "idx": idx,
+                    "dist2": np.inf if idx == i else _point_distance_sq(preserved_targets[i].point, target.point),
+                }
+                for idx, target in enumerate(preserved_targets)
+            ),
+            key=lambda item: item["dist2"],
+        )[: max(0, min(2, len(preserved_targets) - 1))]
+        for entry in nearest:
+            left = min(i, int(entry["idx"]))
+            right = max(i, int(entry["idx"]))
+            key = (left, right)
+            if key in pair_keys:
+                continue
+            pair_keys.add(key)
+            segments.append(
+                (
+                    preserved_targets[left].point,
+                    preserved_targets[right].point,
+                    float(np.sqrt(max(preserved_targets[left].weight * preserved_targets[right].weight, 0.25))),
+                )
+            )
+
+    for force in forces:
+        nearest_targets = sorted(
+            (
+                {"target": target, "dist2": _point_distance_sq(np.asarray(force.point_m, dtype=np.float64), target.point)}
+                for target in preserved_targets
+            ),
+            key=lambda item: item["dist2"],
+        )[: min(2, len(preserved_targets))]
+        for entry in nearest_targets:
+            target = entry["target"]
+            segments.append(
+                (
+                    np.asarray(force.point_m, dtype=np.float64),
+                    target.point,
+                    float(max(0.75, np.sqrt(target.weight) * 0.95)),
+                )
+            )
+
+    return segments
+
+
+def _build_truss_mesh(
+    preserved_targets: list[PreservedTarget],
+    forces: list[Any],
+    characteristic_length: float,
+    thickness_scale: float,
+) -> trimesh.Trimesh:
+    segments = _build_connection_segments(preserved_targets, forces)
+    radius_base = max(characteristic_length * 0.014 * thickness_scale, characteristic_length * 0.0045, 0.0008)
+    parts: list[trimesh.Trimesh] = []
+
+    for start, end, weight in segments:
+        if np.linalg.norm(end - start) <= 1e-6:
+            continue
+        radius = radius_base * (0.72 + weight * 0.42)
+        parts.append(
+            trimesh.creation.cylinder(
+                radius=radius,
+                sections=18,
+                segment=np.vstack([start, end]),
+            )
+        )
+
+    for target in preserved_targets:
+        joint = trimesh.creation.icosphere(subdivisions=2, radius=radius_base * (1.18 + target.weight * 0.25))
+        joint.apply_translation(target.point)
+        parts.append(joint)
+
+    for force in forces:
+        joint = trimesh.creation.icosphere(subdivisions=2, radius=radius_base * 1.02)
+        joint.apply_translation(np.asarray(force.point_m, dtype=np.float64))
+        parts.append(joint)
+
+    if not parts:
+        fallback = trimesh.creation.icosphere(subdivisions=2, radius=radius_base * 1.5)
+        return fallback
+
+    merged = trimesh.util.concatenate(parts)
+    merged.remove_duplicate_faces()
+    merged.remove_unreferenced_vertices()
+    trimesh.smoothing.filter_taubin(merged, lamb=0.5, nu=-0.53, iterations=8)
+    return merged
+
+
 class FusionApproxSolver:
     solver_version = "opentos-v2.0.0-browser-parity"
 
@@ -213,6 +340,8 @@ class FusionApproxSolver:
 
         if preserved_occ.sum() == 0:
             raise RuntimeError("Preserved geometry could not be mapped into the design grid")
+
+        preserved_targets = _build_preserved_targets(study, mesh)
 
         force_seed = _force_seed_mask(all_forces, transform, occ.shape, occ, pitch)
 
@@ -289,6 +418,7 @@ class FusionApproxSolver:
         unit_scale = DISTANCE_TO_M[study.units]
         inv_scale = 1.0 / unit_scale
         material = MATERIALS[study.material]
+        char_length = float(np.linalg.norm(mesh.extents))
 
         preserved_exact = study.source_mesh.submesh([study.preserved_face_indices], append=True, repair=False)
         preserved_exact.remove_unreferenced_vertices()
@@ -355,23 +485,37 @@ class FusionApproxSolver:
                     if design_only.sum() < 300:
                         continue
 
-            try:
-                volume_data = ndi.gaussian_filter(design_only.astype(np.float32), sigma=0.84)
-                verts, faces, _normals, _values = measure.marching_cubes(volume_data, level=0.5, spacing=(1.0, 1.0, 1.0))
-            except ValueError:
-                continue
+            if len(preserved_targets) >= 2:
+                thickness_scale = float(
+                    np.clip(
+                        0.74
+                        + desired_ratio * 0.85
+                        + p.rib_weight * 0.24
+                        + p.medial_weight * 0.18
+                        - p.threshold * 0.26,
+                        0.58,
+                        1.45,
+                    )
+                )
+                generated_m = _build_truss_mesh(preserved_targets, all_forces, char_length, thickness_scale)
+            else:
+                try:
+                    volume_data = ndi.gaussian_filter(design_only.astype(np.float32), sigma=0.84)
+                    verts, faces, _normals, _values = measure.marching_cubes(volume_data, level=0.5, spacing=(1.0, 1.0, 1.0))
+                except ValueError:
+                    continue
 
-            verts_h = np.c_[verts, np.ones((verts.shape[0], 1), dtype=np.float32)]
-            verts_world = (transform @ verts_h.T).T[:, :3]
+                verts_h = np.c_[verts, np.ones((verts.shape[0], 1), dtype=np.float32)]
+                verts_world = (transform @ verts_h.T).T[:, :3]
 
-            generated_m = trimesh.Trimesh(vertices=verts_world, faces=faces.astype(np.int64), process=False)
-            if generated_m.faces.shape[0] < 200:
-                continue
+                generated_m = trimesh.Trimesh(vertices=verts_world, faces=faces.astype(np.int64), process=False)
+                if generated_m.faces.shape[0] < 200:
+                    continue
 
-            generated_m.remove_degenerate_faces()
-            generated_m.remove_duplicate_faces()
-            generated_m.remove_unreferenced_vertices()
-            trimesh.smoothing.filter_taubin(generated_m, lamb=0.5, nu=-0.53, iterations=11)
+                generated_m.remove_degenerate_faces()
+                generated_m.remove_duplicate_faces()
+                generated_m.remove_unreferenced_vertices()
+                trimesh.smoothing.filter_taubin(generated_m, lamb=0.5, nu=-0.53, iterations=11)
 
             generated_src = generated_m.copy()
             generated_src.apply_scale(inv_scale)
@@ -387,7 +531,6 @@ class FusionApproxSolver:
             )
 
             stress_proxy_mpa = (total_force_n / effective_area_m2) / 1e6
-            char_length = float(np.linalg.norm(mesh.extents))
             elastic_pa = material.elastic_modulus_gpa * 1e9
             displacement_proxy_mm = (total_force_n * char_length / max(elastic_pa * effective_area_m2, 1e-6)) * 1000.0
 

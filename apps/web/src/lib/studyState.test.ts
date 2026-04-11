@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { applyFaceLabels, buildSolvePayload, initializeFaceLabels, normalizeDirection } from "./studyState";
 import { describe, expect, it } from "vitest";
 
@@ -18,17 +19,18 @@ describe("study state helpers", () => {
   });
 
   it("builds solve payload with preserved region map", () => {
+    const geometry = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
     const payload = buildSolvePayload({
       model: {
         fileName: "part.obj",
         format: "obj",
         dataBase64: "AAAA",
-        geometry: {} as never,
-        solveGeometry: {} as never,
+        geometry,
+        solveGeometry: geometry,
         solveToDisplayOffset: [0.5, 0, -1]
       },
       units: "mm",
-      faceLabels: ["design", "preserved", "design"],
+      faceLabels: ["fixed", "fixed", "preserved", "preserved", "obstacle", "design", "design", "design", "design", "design", "design", "design"],
       forces: [
         {
           id: "f1",
@@ -46,7 +48,9 @@ describe("study state helpers", () => {
       massReductionGoalPct: 45
     });
 
-    expect(payload.preservedRegions[0].faceIndices).toEqual([1]);
+    expect(payload.preservedRegions[0].id).toBe("fixed-1");
+    expect(payload.preservedRegions[1].id).toBe("preserved-1");
+    expect(payload.loadCases[0].fixedRegions).toEqual(["fixed-1"]);
     expect(payload.loadCases[0].forces[0].direction[2]).toBeCloseTo(-1);
     expect(payload.loadCases[0].forces[0].point).toEqual([-0.5, 0, 1]);
     expect(payload.targets.massReductionGoalPct).toBe(45);

@@ -27,6 +27,15 @@ export function getPreservedFaceIndices(labels) {
     });
     return preserved;
 }
+export function getFixedFaceIndices(labels) {
+    const fixed = [];
+    labels.forEach((label, idx) => {
+        if (label === "fixed") {
+            fixed.push(idx);
+        }
+    });
+    return fixed;
+}
 export function getObstacleFaceIndices(labels) {
     const obstacle = [];
     labels.forEach((label, idx) => {
@@ -52,10 +61,109 @@ export function mapDisplayPointToSolve(point, solveToDisplayOffset) {
         point[2] - solveToDisplayOffset[2]
     ];
 }
+function quantizedVertexKey(x, y, z) {
+    const q = 1e5;
+    return `${Math.round(x * q)}:${Math.round(y * q)}:${Math.round(z * q)}`;
+}
+function buildFaceGroups(geometry, labels, targetLabel) {
+    const positions = geometry.getAttribute("position");
+    if (!positions || positions.itemSize !== 3) {
+        return [];
+    }
+    const faceIndices = [];
+    for (let faceIndex = 0; faceIndex < labels.length; faceIndex += 1) {
+        if (labels[faceIndex] === targetLabel) {
+            faceIndices.push(faceIndex);
+        }
+    }
+    if (faceIndices.length === 0) {
+        return [];
+    }
+    const targetSet = new Set(faceIndices);
+    const adjacency = new Map();
+    const edgeToFaces = new Map();
+    for (const faceIndex of faceIndices) {
+        adjacency.set(faceIndex, []);
+        const base = faceIndex * 9;
+        const keys = [
+            quantizedVertexKey(positions.getX(faceIndex * 3), positions.getY(faceIndex * 3), positions.getZ(faceIndex * 3)),
+            quantizedVertexKey(positions.getX(faceIndex * 3 + 1), positions.getY(faceIndex * 3 + 1), positions.getZ(faceIndex * 3 + 1)),
+            quantizedVertexKey(positions.getX(faceIndex * 3 + 2), positions.getY(faceIndex * 3 + 2), positions.getZ(faceIndex * 3 + 2))
+        ];
+        const edges = [
+            [keys[0], keys[1]],
+            [keys[1], keys[2]],
+            [keys[2], keys[0]]
+        ];
+        for (const [a, b] of edges) {
+            const edgeKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+            const faces = edgeToFaces.get(edgeKey);
+            if (faces) {
+                faces.push(faceIndex);
+            }
+            else {
+                edgeToFaces.set(edgeKey, [faceIndex]);
+            }
+        }
+    }
+    edgeToFaces.forEach((faces) => {
+        if (faces.length < 2) {
+            return;
+        }
+        for (let i = 0; i < faces.length; i += 1) {
+            for (let j = i + 1; j < faces.length; j += 1) {
+                const left = faces[i];
+                const right = faces[j];
+                if (!targetSet.has(left) || !targetSet.has(right)) {
+                    continue;
+                }
+                adjacency.get(left)?.push(right);
+                adjacency.get(right)?.push(left);
+            }
+        }
+    });
+    const groups = [];
+    const visited = new Set();
+    for (const seed of faceIndices) {
+        if (visited.has(seed)) {
+            continue;
+        }
+        const queue = [seed];
+        const group = [];
+        visited.add(seed);
+        while (queue.length > 0) {
+            const current = queue.pop();
+            group.push(current);
+            for (const next of adjacency.get(current) ?? []) {
+                if (!visited.has(next)) {
+                    visited.add(next);
+                    queue.push(next);
+                }
+            }
+        }
+        group.sort((a, b) => a - b);
+        groups.push(group);
+    }
+    return groups;
+}
 export function buildSolvePayload(args) {
     const preserved = getPreservedFaceIndices(args.faceLabels);
+    const fixed = getFixedFaceIndices(args.faceLabels);
     const design = getDesignFaceIndices(args.faceLabels);
     const obstacle = getObstacleFaceIndices(args.faceLabels);
+    const fixedGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "fixed");
+    const preservedGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "preserved");
+    const obstacleGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "obstacle");
+    const preservedRegions = [
+        ...fixedGroups.map((faceIndices, index) => ({
+            id: `fixed-${index + 1}`,
+            faceIndices
+        })),
+        ...preservedGroups.map((faceIndices, index) => ({
+            id: `preserved-${index + 1}`,
+            faceIndices
+        }))
+    ];
     return {
         model: {
             format: args.model.format,
@@ -63,26 +171,23 @@ export function buildSolvePayload(args) {
         },
         units: args.units,
         designRegion: {
-            faceIndices: design.length > 0 ? design : args.faceLabels.map((_, idx) => idx).filter((idx) => !preserved.includes(idx))
+            faceIndices: design.length > 0
+                ? design
+                : args.faceLabels
+                    .map((_, idx) => idx)
+                    .filter((idx) => !preserved.includes(idx) && !fixed.includes(idx))
         },
-        preservedRegions: [
-            {
-                id: "preserved-main",
-                faceIndices: preserved
-            }
-        ],
+        preservedRegions,
         obstacleRegions: obstacle.length
-            ? [
-                {
-                    id: "obstacle-main",
-                    faceIndices: obstacle
-                }
-            ]
+            ? obstacleGroups.map((faceIndices, index) => ({
+                id: `obstacle-${index + 1}`,
+                faceIndices
+            }))
             : [],
         loadCases: [
             {
                 id: "LC-1",
-                fixedRegions: ["preserved-main"],
+                fixedRegions: fixedGroups.map((_, index) => `fixed-${index + 1}`),
                 forces: args.forces.map((force) => ({
                     point: mapDisplayPointToSolve(force.point, args.model.solveToDisplayOffset),
                     direction: normalizeDirection(force.direction),

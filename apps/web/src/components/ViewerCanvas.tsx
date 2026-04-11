@@ -22,7 +22,7 @@ import {
 
 const LABEL_COLORS: Record<RegionLabel, THREE.ColorRepresentation> = {
   preserved: "#35d07f",
-  fixed: "#35d07f",
+  fixed: "#5ad1ff",
   obstacle: "#f59e0b",
   design: "#8a95ad",
   unassigned: "#526071"
@@ -216,7 +216,7 @@ function EditablePart({
 
   const applyPreservedSelection = (
     event: ThreeEvent<PointerEvent> | ThreeEvent<MouseEvent>,
-    label: "preserved" | "design"
+    label: "preserved" | "fixed" | "design"
   ): void => {
     const fallbackFaceIndex = event.faceIndex;
     const candidateFaceIndices =
@@ -249,19 +249,24 @@ function EditablePart({
       event.ray.clone()
     );
     const preservedCandidateFace =
-      resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
-      faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+      resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed") ??
+      faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
     const facesToApply =
       label === "design"
         ? preservedCandidateFace != null
-          ? selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved")
+          ? selectConnectedLabeledFaces(
+              preservedCandidateFace,
+              surfaceTopology,
+              faceLabels,
+              faceLabels[preservedCandidateFace] === "fixed" ? "fixed" : "preserved"
+            )
           : lastPreservedFacesRef.current
         : resolvedFaces;
 
     if (facesToApply.length === 0) {
       return;
     }
-    if (label === "preserved") {
+    if (label === "preserved" || label === "fixed") {
       lastPreservedFacesRef.current = facesToApply;
     } else if (label === "design") {
       lastPreservedFacesRef.current = [];
@@ -270,7 +275,7 @@ function EditablePart({
   };
 
   useEffect(() => {
-    if (paintLabel !== "preserved" || placeForceMode) {
+    if ((paintLabel !== "preserved" && paintLabel !== "fixed") || placeForceMode) {
       return;
     }
     let lastHandledAt = 0;
@@ -300,12 +305,17 @@ function EditablePart({
             raycaster.ray.clone()
           );
           const preservedCandidateFace =
-            resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
-            candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+            resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed") ??
+            candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
 
           if (preservedCandidateFace != null) {
             onPaintFaces(
-              selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved"),
+              selectConnectedLabeledFaces(
+                preservedCandidateFace,
+                surfaceTopology,
+                faceLabels,
+                faceLabels[preservedCandidateFace] === "fixed" ? "fixed" : "preserved"
+              ),
               "design"
             );
             lastPreservedFacesRef.current = [];
@@ -375,10 +385,10 @@ function EditablePart({
           placeForce(event);
           return;
         }
-        if (paintLabel === "preserved" && event.button === 0) {
+        if ((paintLabel === "preserved" || paintLabel === "fixed") && event.button === 0) {
           event.stopPropagation();
           event.nativeEvent.preventDefault();
-          applyPreservedSelection(event, "preserved");
+          applyPreservedSelection(event, paintLabel);
         }
       }}
       castShadow

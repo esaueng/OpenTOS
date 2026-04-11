@@ -28,6 +28,7 @@ class NormalizedStudyInputV2:
     source_mesh: trimesh.Trimesh
     units: str
     preserved_face_indices: np.ndarray
+    preserved_region_faces: dict[str, np.ndarray]
     design_face_indices: np.ndarray
     obstacle_face_indices: np.ndarray
     load_cases: list[NormalizedLoadCase]
