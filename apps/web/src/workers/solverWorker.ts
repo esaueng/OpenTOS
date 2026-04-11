@@ -15,7 +15,7 @@ import {
 import { combineInfluenceFields, computeBaseInfluenceFields } from "./solver/fields";
 import { exportOutcomeGlb } from "./solver/export";
 import { clamp01 } from "./solver/math";
-import { buildOrganicTrussGeometry, extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
+import { extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
 import { computeOutcomeMetrics, geometryVolume } from "./solver/metrics";
 import { solveDensityField } from "./solver/optimize";
 import type {
@@ -251,6 +251,112 @@ function buildTrussBoostField(
   return out;
 }
 
+function buildConnectorSegments(
+  preservedTargets: PreservedTarget[],
+  forces: ForceVec[]
+): Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> {
+  const segments: Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> = [];
+  if (preservedTargets.length >= 2) {
+    const used = new Array(preservedTargets.length).fill(false);
+    used[0] = true;
+    for (let step = 1; step < preservedTargets.length; step += 1) {
+      let bestA = -1;
+      let bestB = -1;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < preservedTargets.length; i += 1) {
+        if (!used[i]) continue;
+        for (let j = 0; j < preservedTargets.length; j += 1) {
+          if (used[j]) continue;
+          const dist2 = pointDistanceSquared(preservedTargets[i].point, preservedTargets[j].point);
+          if (dist2 < bestDist) {
+            bestDist = dist2;
+            bestA = i;
+            bestB = j;
+          }
+        }
+      }
+      if (bestA >= 0 && bestB >= 0) {
+        used[bestB] = true;
+        segments.push({
+          start: preservedTargets[bestA].point,
+          end: preservedTargets[bestB].point,
+          weight: Math.sqrt(
+            Math.max(preservedTargets[bestA].weight * preservedTargets[bestB].weight, 0.25)
+          )
+        });
+      }
+    }
+  }
+
+  for (const force of forces) {
+    if (!preservedTargets.length) break;
+    let bestIdx = 0;
+    let bestDist = pointDistanceSquared(force.point, preservedTargets[0].point);
+    for (let i = 1; i < preservedTargets.length; i += 1) {
+      const dist2 = pointDistanceSquared(force.point, preservedTargets[i].point);
+      if (dist2 < bestDist) {
+        bestDist = dist2;
+        bestIdx = i;
+      }
+    }
+    segments.push({
+      start: force.point,
+      end: preservedTargets[bestIdx].point,
+      weight: Math.max(0.7, Math.sqrt(preservedTargets[bestIdx].weight) * 0.9)
+    });
+  }
+
+  return segments;
+}
+
+function rasterizeConnectorMask(
+  grid: ReturnType<typeof buildVoxelGrid>,
+  domainMask: Uint8Array,
+  segments: Array<{ start: [number, number, number]; end: [number, number, number] }>,
+  radius: number
+): Uint8Array {
+  const mask = new Uint8Array(grid.total);
+  const r2 = radius * radius;
+  const stepInv = 1 / grid.step;
+
+  for (const segment of segments) {
+    const minX = Math.min(segment.start[0], segment.end[0]) - radius;
+    const maxX = Math.max(segment.start[0], segment.end[0]) + radius;
+    const minY = Math.min(segment.start[1], segment.end[1]) - radius;
+    const maxY = Math.max(segment.start[1], segment.end[1]) + radius;
+    const minZ = Math.min(segment.start[2], segment.end[2]) - radius;
+    const maxZ = Math.max(segment.start[2], segment.end[2]) + radius;
+
+    const gx0 = Math.max(0, Math.floor((minX - grid.origin[0]) * stepInv));
+    const gx1 = Math.min(grid.nx - 1, Math.ceil((maxX - grid.origin[0]) * stepInv));
+    const gy0 = Math.max(0, Math.floor((minY - grid.origin[1]) * stepInv));
+    const gy1 = Math.min(grid.ny - 1, Math.ceil((maxY - grid.origin[1]) * stepInv));
+    const gz0 = Math.max(0, Math.floor((minZ - grid.origin[2]) * stepInv));
+    const gz1 = Math.min(grid.nz - 1, Math.ceil((maxZ - grid.origin[2]) * stepInv));
+
+    for (let z = gz0; z <= gz1; z += 1) {
+      for (let y = gy0; y <= gy1; y += 1) {
+        for (let x = gx0; x <= gx1; x += 1) {
+          const idx = x + grid.nx * (y + grid.ny * z);
+          if (!domainMask[idx]) {
+            continue;
+          }
+          const point: [number, number, number] = [
+            grid.origin[0] + (x + 0.5) * grid.step,
+            grid.origin[1] + (y + 0.5) * grid.step,
+            grid.origin[2] + (z + 0.5) * grid.step
+          ];
+          if (distanceToSegmentSquared(point, segment.start, segment.end) <= r2) {
+            mask[idx] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  return mask;
+}
+
 async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
   const request = payload.request;
   const warnings: string[] = [];
@@ -461,6 +567,19 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       surfaceDistance
     });
 
+    const connectorSegments = buildConnectorSegments(preservedTargets, forces);
+    if (connectorSegments.length) {
+      const connectorRadius = Math.max(grid.step * 2.1, bbox.diagonal * 0.012);
+      const connectorMask = rasterizeConnectorMask(grid, constrainedDomain, connectorSegments, connectorRadius);
+      for (let i = 0; i < connectorMask.length; i += 1) {
+        if (!connectorMask[i]) {
+          continue;
+        }
+        densityResult.occupancy[i] = 1;
+        densityResult.density[i] = Math.max(densityResult.density[i], 0.78);
+      }
+    }
+
     const signature = computeSignature(densityResult.occupancy, constrainedDomain);
     const unique = isUniqueVariant(densityResult.occupancy, signature, acceptedVariants, constrainedDomain);
 
@@ -482,26 +601,13 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       warnings
     });
 
-    const generatedGeometry =
-      trussBoostField && preservedTargets.length >= 2
-        ? buildOrganicTrussGeometry({
-            preservedTargets,
-            forces,
-            bboxCenter: [
-              (bbox.min[0] + bbox.max[0]) * 0.5,
-              (bbox.min[1] + bbox.max[1]) * 0.5,
-              (bbox.min[2] + bbox.max[2]) * 0.5
-            ],
-            characteristicLength: bbox.diagonal,
-            taubinIterations: qualityConfig.taubinIterations
-          })
-        : extractIsoSurface(
-            grid,
-            densityResult.density,
-            constrainedDomain,
-            0.52,
-            qualityConfig.taubinIterations
-          );
+    const generatedGeometry = extractIsoSurface(
+      grid,
+      densityResult.density,
+      constrainedDomain,
+      0.52,
+      qualityConfig.taubinIterations
+    );
 
     const preservedGeometry = makePreservedGeometry(positions, preservedData.allFaces);
     const glbBase64 = await exportOutcomeGlb(preservedGeometry, generatedGeometry);
