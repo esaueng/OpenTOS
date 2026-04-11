@@ -136,6 +136,7 @@ def normalize_study(request: StudyCreateRequest, run_options: RunOptions) -> Nor
         source_mesh=source_mesh,
         units=request.units,
         preserved_face_indices=preserved_face_indices,
+        preserved_region_faces=preserved_region_map,
         design_face_indices=design_filtered,
         obstacle_face_indices=obstacle_face_indices,
         load_cases=normalized_load_cases,

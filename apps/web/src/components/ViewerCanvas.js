@@ -10,7 +10,7 @@ THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 const LABEL_COLORS = {
     preserved: "#35d07f",
-    fixed: "#35d07f",
+    fixed: "#5ad1ff",
     obstacle: "#f59e0b",
     design: "#8a95ad",
     unassigned: "#526071"
@@ -148,17 +148,17 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
             ? candidateFaceIndices
             : [fallbackFaceIndex];
         const resolvedFaces = resolvePreservedSurfaceSelectionFromCandidates(faceIndicesToResolve, surfaceTopology, event.ray.clone());
-        const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
-            faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+        const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed") ??
+            faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
         const facesToApply = label === "design"
             ? preservedCandidateFace != null
-                ? selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved")
+                ? selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, faceLabels[preservedCandidateFace] === "fixed" ? "fixed" : "preserved")
                 : lastPreservedFacesRef.current
             : resolvedFaces;
         if (facesToApply.length === 0) {
             return;
         }
-        if (label === "preserved") {
+        if (label === "preserved" || label === "fixed") {
             lastPreservedFacesRef.current = facesToApply;
         }
         else if (label === "design") {
@@ -167,7 +167,7 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
         onPaintFaces(facesToApply, label);
     };
     useEffect(() => {
-        if (paintLabel !== "preserved" || placeForceMode) {
+        if ((paintLabel !== "preserved" && paintLabel !== "fixed") || placeForceMode) {
             return;
         }
         let lastHandledAt = 0;
@@ -184,10 +184,10 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
                     .filter((faceIndex) => faceIndex != null && faceIndex >= 0 && faceIndex < faceCount)));
                 if (candidateFaceIndices.length > 0) {
                     const resolvedFaces = resolvePreservedSurfaceSelectionFromCandidates(candidateFaceIndices, surfaceTopology, raycaster.ray.clone());
-                    const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved") ??
-                        candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved");
+                    const preservedCandidateFace = resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed") ??
+                        candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
                     if (preservedCandidateFace != null) {
-                        onPaintFaces(selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, "preserved"), "design");
+                        onPaintFaces(selectConnectedLabeledFaces(preservedCandidateFace, surfaceTopology, faceLabels, faceLabels[preservedCandidateFace] === "fixed" ? "fixed" : "preserved"), "design");
                         lastPreservedFacesRef.current = [];
                         return;
                     }
@@ -243,10 +243,10 @@ function EditablePart({ geometry, faceLabels, paintLabel, brushRadius, onPaintFa
                 placeForce(event);
                 return;
             }
-            if (paintLabel === "preserved" && event.button === 0) {
+            if ((paintLabel === "preserved" || paintLabel === "fixed") && event.button === 0) {
                 event.stopPropagation();
                 event.nativeEvent.preventDefault();
-                applyPreservedSelection(event, "preserved");
+                applyPreservedSelection(event, paintLabel);
             }
         }, castShadow: true, receiveShadow: true, children: _jsx("meshStandardMaterial", { color: "#8a95ad", metalness: 0.08, roughness: 0.7, vertexColors: true, side: THREE.DoubleSide, transparent: false, depthWrite: true, depthTest: true }) }));
 }
