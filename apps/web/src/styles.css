@@ -138,6 +138,29 @@ button.is-active {
   border-top: 1px dashed rgba(149, 171, 219, 0.35);
 }
 
+.panel-subsection {
+  margin-bottom: 0.7rem;
+}
+
+.panel-subsection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.panel-subsection-header strong {
+  font-size: 0.8rem;
+  color: #d8e6ff;
+}
+
+.panel-subsection-header button {
+  width: auto;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
 .run-button {
   margin-top: 0.72rem;
   background: linear-gradient(125deg, #1b7f73, #2ea7ae);

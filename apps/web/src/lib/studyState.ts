@@ -1,6 +1,7 @@
+import type { FaceRegion } from "@contracts/index";
 import type * as THREE from "three";
 
-import type { BuildSolvePayloadArgs, RegionLabel, SolvePayload } from "../types";
+import type { BuildSolvePayloadArgs, LoadCaseState, RegionLabel, SolvePayload } from "../types";
 
 export function initializeFaceLabels(faceCount: number): RegionLabel[] {
   return Array.from({ length: faceCount }, () => "design");
@@ -179,24 +180,58 @@ function buildFaceGroups(
   return groups;
 }
 
+export function buildConstraintGroups(
+  geometry: THREE.BufferGeometry,
+  labels: RegionLabel[]
+): {
+  fixedRegions: FaceRegion[];
+  preservedRegions: FaceRegion[];
+  obstacleRegions: FaceRegion[];
+} {
+  const fixedRegions = buildFaceGroups(geometry, labels, "fixed").map((faceIndices, index) => ({
+    id: `fixed-${index + 1}`,
+    faceIndices
+  }));
+  const preservedRegions = buildFaceGroups(geometry, labels, "preserved").map((faceIndices, index) => ({
+    id: `preserved-${index + 1}`,
+    faceIndices
+  }));
+  const obstacleRegions = buildFaceGroups(geometry, labels, "obstacle").map((faceIndices, index) => ({
+    id: `obstacle-${index + 1}`,
+    faceIndices
+  }));
+
+  return {
+    fixedRegions,
+    preservedRegions,
+    obstacleRegions
+  };
+}
+
+export function buildActiveLoadCases(
+  loadCases: LoadCaseState[],
+  forces: BuildSolvePayloadArgs["forces"],
+  fixedRegions: FaceRegion[]
+): SolvePayload["loadCases"] {
+  const validFixedRegionIds = new Set(fixedRegions.map((region) => region.id));
+  return loadCases
+    .map((loadCase) => ({
+      id: loadCase.id,
+      fixedRegions: loadCase.fixedRegionIds.filter((regionId) => validFixedRegionIds.has(regionId)),
+      forces: forces.filter((force) => force.loadCaseId === loadCase.id)
+    }))
+    .filter((loadCase) => loadCase.forces.length > 0);
+}
+
 export function buildSolvePayload(args: BuildSolvePayloadArgs): SolvePayload {
   const preserved = getPreservedFaceIndices(args.faceLabels);
   const fixed = getFixedFaceIndices(args.faceLabels);
   const design = getDesignFaceIndices(args.faceLabels);
   const obstacle = getObstacleFaceIndices(args.faceLabels);
-  const fixedGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "fixed");
-  const preservedGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "preserved");
-  const obstacleGroups = buildFaceGroups(args.model.solveGeometry, args.faceLabels, "obstacle");
-  const preservedRegions = [
-    ...fixedGroups.map((faceIndices, index) => ({
-      id: `fixed-${index + 1}`,
-      faceIndices
-    })),
-    ...preservedGroups.map((faceIndices, index) => ({
-      id: `preserved-${index + 1}`,
-      faceIndices
-    }))
-  ];
+  const groups = buildConstraintGroups(args.model.solveGeometry, args.faceLabels);
+  const preservedRegions = [...groups.fixedRegions, ...groups.preservedRegions];
+  const requestedLoadCases = args.loadCases.length > 0 ? args.loadCases : [{ id: "LC-1", fixedRegionIds: [] }];
+  const activeLoadCases = buildActiveLoadCases(requestedLoadCases, args.forces, groups.fixedRegions);
 
   return {
     model: {
@@ -213,25 +248,18 @@ export function buildSolvePayload(args: BuildSolvePayloadArgs): SolvePayload {
               .filter((idx) => !preserved.includes(idx) && !fixed.includes(idx))
     },
     preservedRegions,
-    obstacleRegions: obstacle.length
-      ? obstacleGroups.map((faceIndices, index) => ({
-          id: `obstacle-${index + 1}`,
-          faceIndices
-        }))
-      : [],
-    loadCases: [
-      {
-        id: "LC-1",
-        fixedRegions: fixedGroups.map((_, index) => `fixed-${index + 1}`),
-        forces: args.forces.map((force) => ({
-          point: mapDisplayPointToSolve(force.point, args.model.solveToDisplayOffset),
-          direction: normalizeDirection(force.direction),
-          magnitude: force.magnitude,
-          unit: force.unit,
-          label: force.label
-        }))
-      }
-    ],
+    obstacleRegions: obstacle.length ? groups.obstacleRegions : [],
+    loadCases: activeLoadCases.map((loadCase) => ({
+      id: loadCase.id,
+      fixedRegions: loadCase.fixedRegions,
+      forces: loadCase.forces.map((force) => ({
+        point: mapDisplayPointToSolve(force.point, args.model.solveToDisplayOffset),
+        direction: normalizeDirection(force.direction),
+        magnitude: force.magnitude,
+        unit: force.unit,
+        label: force.label
+      }))
+    })),
     material: args.material,
     targets: {
       safetyFactor: args.targetSafetyFactor,

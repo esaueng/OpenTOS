@@ -3,7 +3,8 @@
 ## Web (`apps/web`)
 
 - React + TypeScript + Vite.
-- `@react-three/fiber` viewer with face brush painting for design/preserved/obstacle labeling.
+- TypeScript is the only tracked source of truth for the web app; generated JS is not kept in `src/`.
+- `@react-three/fiber` viewer with face brush painting for design/preserved/fixed/obstacle labeling.
 - Force placement by clicking mesh surfaces and editing direction/magnitude in-panel.
 - Outcome grid supports side-by-side comparison with thumbnail previews and metric cards.
 - Browser worker solver stack in `apps/web/src/workers/solver`:
@@ -26,6 +27,7 @@
 - Async job execution via thread pool.
 - SQLite metadata store (`studies_v2`, `study_constraints_v2`, `study_loadcases_v2`, `jobs_v2`, `outcomes_v2`, `benchmarks_v2`) plus filesystem artifact persistence.
 - Shared payload contract validated by Pydantic and shared JSON schema (`packages/contracts/schema`).
+- Fixed regions are modeled as preserved interface groups that are referenced by load-case `fixedRegions`.
 
 ## Solver (`FusionApproxSolver`)
 

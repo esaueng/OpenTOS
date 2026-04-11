@@ -16,12 +16,18 @@ export interface UploadedModel {
 
 export interface ForceState {
   id: string;
+  loadCaseId: string;
   point: [number, number, number];
   direction: [number, number, number];
   normal: [number, number, number];
   magnitude: number;
   unit: "N" | "lb";
   label: string;
+}
+
+export interface LoadCaseState {
+  id: string;
+  fixedRegionIds: string[];
 }
 
 export interface StudySettings {
@@ -55,6 +61,7 @@ export interface BuildSolvePayloadArgs {
   units: StudySettings["units"];
   faceLabels: RegionLabel[];
   forces: ForceState[];
+  loadCases: LoadCaseState[];
   material: StudySettings["material"];
   targetSafetyFactor: number;
   outcomeCount: number;
