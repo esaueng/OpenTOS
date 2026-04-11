@@ -8,6 +8,7 @@ import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
 import { MATERIAL_OPTIONS } from "./materials";
 import {
   applyFaceLabels,
+  buildConstraintGroups,
   buildSolvePayload,
   getFixedFaceIndices,
   getObstacleFaceIndices,
@@ -18,6 +19,7 @@ import type {
   BrowserQualityProfile,
   ForceState,
   JobStatus,
+  LoadCaseState,
   RegionLabel,
   StudySettings,
   UploadedModel
@@ -61,6 +63,17 @@ const STAGES: JobStatus["stage"][] = [
   "complete"
 ];
 
+function makeLoadCaseId(index: number): string {
+  return `LC-${index}`;
+}
+
+function defaultLoadCase(index = 1): LoadCaseState {
+  return {
+    id: makeLoadCaseId(index),
+    fixedRegionIds: []
+  };
+}
+
 function stageLabel(stage: JobStatus["stage"]): string {
   switch (stage) {
     case "constraint-map":
@@ -82,8 +95,11 @@ export default function App() {
   const [paintLabel, setPaintLabel] = useState<RegionLabel | null>("preserved");
   const [brushRadius, setBrushRadius] = useState(0.06);
   const [placeForceMode, setPlaceForceMode] = useState(false);
+  const [loadCases, setLoadCases] = useState<LoadCaseState[]>([defaultLoadCase(1)]);
+  const [selectedLoadCaseId, setSelectedLoadCaseId] = useState<string>("LC-1");
   const [forces, setForces] = useState<ForceState[]>([]);
   const [selectedForceId, setSelectedForceId] = useState<string | null>(null);
+  const [showAllForces, setShowAllForces] = useState(true);
 
   const [settings, setSettings] = useState<StudySettings>({
     units: "mm",
@@ -112,7 +128,28 @@ export default function App() {
     () => forces.find((force) => force.id === selectedForceId) ?? null,
     [forces, selectedForceId]
   );
+  const selectedLoadCase = useMemo(
+    () => loadCases.find((loadCase) => loadCase.id === selectedLoadCaseId) ?? null,
+    [loadCases, selectedLoadCaseId]
+  );
   const isBrowserSolver = SOLVER_MODE === "browser";
+  const constraintGroups = useMemo(
+    () => (model ? buildConstraintGroups(model.solveGeometry, faceLabels) : { fixedRegions: [], preservedRegions: [], obstacleRegions: [] }),
+    [faceLabels, model]
+  );
+  const forcesByLoadCase = useMemo(() => {
+    const map = new Map<string, ForceState[]>();
+    for (const loadCase of loadCases) {
+      map.set(loadCase.id, []);
+    }
+    for (const force of forces) {
+      if (!map.has(force.loadCaseId)) {
+        map.set(force.loadCaseId, []);
+      }
+      map.get(force.loadCaseId)?.push(force);
+    }
+    return map;
+  }, [forces, loadCases]);
 
   useEffect(() => {
     return () => {
@@ -222,6 +259,8 @@ export default function App() {
 
     setModel(parsed);
     setFaceLabels(initializeFaceLabels(faceCount));
+    setLoadCases([defaultLoadCase(1)]);
+    setSelectedLoadCaseId("LC-1");
     setForces([]);
     setSelectedForceId(null);
     setOutcomes([]);
@@ -243,9 +282,17 @@ export default function App() {
   };
 
   const addForce = (point: [number, number, number], normal: [number, number, number]) => {
+    let activeLoadCaseId = selectedLoadCaseId || loadCases[0]?.id || "LC-1";
+    if (!loadCases.find((loadCase) => loadCase.id === activeLoadCaseId)) {
+      const next = defaultLoadCase(loadCases.length + 1);
+      activeLoadCaseId = next.id;
+      setLoadCases((current) => [...current, next]);
+      setSelectedLoadCaseId(next.id);
+    }
     const id = `F-${forces.length + 1}`;
     const force: ForceState = {
       id,
+      loadCaseId: activeLoadCaseId,
       point,
       direction: normal,
       normal,
@@ -276,6 +323,61 @@ export default function App() {
     setSelectedForceId((current) => (current === forceId ? null : current));
   };
 
+  const addLoadCase = () => {
+    const nextIndex = loadCases.length + 1;
+    const next = defaultLoadCase(nextIndex);
+    setLoadCases((current) => [...current, next]);
+    setSelectedLoadCaseId(next.id);
+  };
+
+  const updateLoadCase = (loadCaseId: string, patch: Partial<LoadCaseState>) => {
+    setLoadCases((current) =>
+      current.map((loadCase) =>
+        loadCase.id === loadCaseId
+          ? {
+              ...loadCase,
+              ...patch
+            }
+          : loadCase
+      )
+    );
+  };
+
+  const removeLoadCase = (loadCaseId: string) => {
+    if (loadCases.length <= 1) {
+      return;
+    }
+    const remaining = loadCases.filter((loadCase) => loadCase.id !== loadCaseId);
+    const fallbackId = remaining[0]?.id ?? "LC-1";
+    setLoadCases(remaining);
+    setForces((current) =>
+      current.map((force) =>
+        force.loadCaseId === loadCaseId
+          ? {
+              ...force,
+              loadCaseId: fallbackId
+            }
+          : force
+      )
+    );
+    setSelectedLoadCaseId((current) => (current === loadCaseId ? fallbackId : current));
+  };
+
+  useEffect(() => {
+    const validFixedIds = new Set(constraintGroups.fixedRegions.map((region) => region.id));
+    setLoadCases((current) =>
+      current.map((loadCase) => {
+        const filtered = loadCase.fixedRegionIds.filter((regionId) => validFixedIds.has(regionId));
+        return filtered.length === loadCase.fixedRegionIds.length
+          ? loadCase
+          : {
+              ...loadCase,
+              fixedRegionIds: filtered
+            };
+      })
+    );
+  }, [constraintGroups.fixedRegions]);
+
   const runStudy = async () => {
     if (isSubmittingStudy || jobId) {
       return;
@@ -293,6 +395,18 @@ export default function App() {
 
     if (fixedCount === 0) {
       setError("Mark at least one fixed region before solve.");
+      return;
+    }
+
+    const activeLoadCases = loadCases.filter((loadCase) => forces.some((force) => force.loadCaseId === loadCase.id));
+    if (activeLoadCases.length === 0) {
+      setError("Add at least one force to a load case before solve.");
+      return;
+    }
+
+    const invalidLoadCase = activeLoadCases.find((loadCase) => loadCase.fixedRegionIds.length === 0);
+    if (invalidLoadCase) {
+      setError(`${invalidLoadCase.id} must reference at least one fixed region.`);
       return;
     }
 
@@ -314,13 +428,14 @@ export default function App() {
         const payload = buildSolvePayload({
           model,
           units: settings.units,
-        faceLabels,
-        forces,
-        material: settings.material,
-        targetSafetyFactor: settings.targetSafetyFactor,
-        outcomeCount: settings.outcomeCount,
-        massReductionGoalPct: settings.massReductionGoalPct
-      });
+          faceLabels,
+          forces,
+          loadCases,
+          material: settings.material,
+          targetSafetyFactor: settings.targetSafetyFactor,
+          outcomeCount: settings.outcomeCount,
+          massReductionGoalPct: settings.massReductionGoalPct
+        });
 
       if (isBrowserSolver) {
         workerRef.current?.terminate();
@@ -599,6 +714,71 @@ export default function App() {
 
         <section className="panel-card">
           <h2>3. Loads</h2>
+          <div className="panel-subsection">
+            <div className="panel-subsection-header">
+              <strong>Load Cases</strong>
+              <button type="button" onClick={addLoadCase}>
+                Add Load Case
+              </button>
+            </div>
+            <div className="force-list">
+              {loadCases.map((loadCase) => (
+                <button
+                  key={loadCase.id}
+                  type="button"
+                  className={`force-chip ${selectedLoadCaseId === loadCase.id ? "is-active" : ""}`}
+                  onClick={() => setSelectedLoadCaseId(loadCase.id)}
+                >
+                  {loadCase.id} ({forcesByLoadCase.get(loadCase.id)?.length ?? 0})
+                </button>
+              ))}
+            </div>
+            {selectedLoadCase && (
+              <div className="force-editor">
+                <p className="small-note">Fixed interfaces for {selectedLoadCase.id}</p>
+                <div className="force-list">
+                  {constraintGroups.fixedRegions.length > 0 ? (
+                    constraintGroups.fixedRegions.map((region) => {
+                      const active = selectedLoadCase.fixedRegionIds.includes(region.id);
+                      return (
+                        <button
+                          key={region.id}
+                          type="button"
+                          className={`force-chip ${active ? "is-active" : ""}`}
+                          onClick={() =>
+                            updateLoadCase(selectedLoadCase.id, {
+                              fixedRegionIds: active
+                                ? selectedLoadCase.fixedRegionIds.filter((regionId) => regionId !== region.id)
+                                : [...selectedLoadCase.fixedRegionIds, region.id]
+                            })
+                          }
+                        >
+                          {region.id} ({region.faceIndices.length})
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <p className="small-note">Mark one or more fixed surfaces to define boundary conditions.</p>
+                  )}
+                </div>
+                <div className="inline-buttons">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateLoadCase(selectedLoadCase.id, {
+                        fixedRegionIds: constraintGroups.fixedRegions.map((region) => region.id)
+                      })
+                    }
+                  >
+                    Use All Fixed
+                  </button>
+                  <button type="button" disabled={loadCases.length <= 1} onClick={() => removeLoadCase(selectedLoadCase.id)}>
+                    Remove Load Case
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className={placeForceMode ? "is-active" : ""}
@@ -609,22 +789,46 @@ export default function App() {
           >
             {placeForceMode ? "Click Surface to Place..." : "Add Force"}
           </button>
+          <div className="inline-buttons" style={{ marginTop: "0.45rem" }}>
+            <button type="button" className={showAllForces ? "is-active" : ""} onClick={() => setShowAllForces(true)}>
+              Show All Forces
+            </button>
+            <button type="button" className={!showAllForces ? "is-active" : ""} onClick={() => setShowAllForces(false)}>
+              Show Selected Case
+            </button>
+          </div>
 
           <div className="force-list">
-            {forces.map((force) => (
+            {(showAllForces ? forces : forces.filter((force) => force.loadCaseId === selectedLoadCaseId)).map((force) => (
               <button
                 key={force.id}
                 type="button"
                 className={`force-chip ${selectedForceId === force.id ? "is-active" : ""}`}
-                onClick={() => setSelectedForceId(force.id)}
+                onClick={() => {
+                  setSelectedForceId(force.id);
+                  setSelectedLoadCaseId(force.loadCaseId);
+                }}
               >
-                {force.label}
+                {force.label} · {force.loadCaseId}
               </button>
             ))}
           </div>
 
           {selectedForce && (
             <div className="force-editor">
+              <label>
+                Load Case
+                <select
+                  value={selectedForce.loadCaseId}
+                  onChange={(event) => updateForce(selectedForce.id, { loadCaseId: event.target.value })}
+                >
+                  {loadCases.map((loadCase) => (
+                    <option key={loadCase.id} value={loadCase.id}>
+                      {loadCase.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Magnitude
                 <input
@@ -783,7 +987,7 @@ export default function App() {
             {isSubmittingStudy || jobId ? "Starting Study..." : "Run Generative Study"}
           </button>
           <p className="small-note run-hint">
-            Required: model upload, at least 1 fixed face, at least 1 preserved-or-fixed face, and at least 1 force.
+            Required: model upload, at least 1 fixed face, at least 1 preserved-or-fixed face, and at least 1 force assigned to a load case.
           </p>
           <p className="small-note run-hint">
             Solver mode: {isBrowserSolver ? "Browser (local compute)" : "API (remote compute)"}

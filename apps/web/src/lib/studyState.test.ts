@@ -34,6 +34,7 @@ describe("study state helpers", () => {
       forces: [
         {
           id: "f1",
+          loadCaseId: "LC-1",
           point: [0, 0, 0],
           direction: [0, 0, -5],
           normal: [0, 0, 1],
@@ -42,6 +43,7 @@ describe("study state helpers", () => {
           label: "10lb"
         }
       ],
+      loadCases: [{ id: "LC-1", fixedRegionIds: ["fixed-1"] }],
       material: "PETG",
       targetSafetyFactor: 2,
       outcomeCount: 4,
