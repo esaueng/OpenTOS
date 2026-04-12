@@ -427,37 +427,69 @@ function ForceArrow({
     }
     return normal.normalize();
   }, [direction, force.normal]);
-  const length = Math.max(scale * 0.12, Math.min(scale * 0.24, scale * (0.1 + Math.log10(force.magnitude + 1) * 0.045)));
-  const shaftRadius = Math.max(scale * 0.006, length * 0.055);
-  const coneRadius = shaftRadius * 2.4;
-  const coneLength = length * 0.24;
-  const contactRadius = shaftRadius * 1.2;
-  const guideRadius = shaftRadius * 0.35;
-  const contactGap = Math.max(scale * 0.01, shaftRadius * 1.4);
-  const pointingAwayFromSurface = direction.dot(surfaceNormal) >= 0;
-  const rootOffset = pointingAwayFromSurface ? contactGap : length + contactGap;
-  const rootPosition = useMemo(
-    () => new THREE.Vector3(...force.point).addScaledVector(surfaceNormal, rootOffset),
-    [force.point, rootOffset, surfaceNormal]
+  const forceScale = Math.max(scale, 0.25);
+  const shaftLength = Math.max(
+    forceScale * 0.16,
+    Math.min(forceScale * 0.3, forceScale * (0.14 + Math.log10(force.magnitude + 1) * 0.065))
   );
-  const guideLength = Math.max(rootOffset - contactGap, 0);
-  const quaternion = useMemo(() => {
+  const coneLength = shaftLength * 0.34;
+  const arrowTravel = shaftLength + coneLength;
+  const shaftRadius = Math.max(forceScale * 0.008, shaftLength * 0.06);
+  const coneRadius = shaftRadius * 2.7;
+  const tailRadius = shaftRadius * 1.5;
+  const contactRadius = shaftRadius * 1.3;
+  const guideRadius = shaftRadius * 0.4;
+  const contactLift = Math.max(forceScale * 0.012, contactRadius * 1.15);
+  const standOff = Math.max(forceScale * 0.08, arrowTravel * 0.72);
+  const tipOutsideSurface = useMemo(
+    () => new THREE.Vector3(...force.point).addScaledVector(surfaceNormal, contactLift + standOff),
+    [contactLift, force.point, standOff, surfaceNormal]
+  );
+  const contactPosition = useMemo(
+    () => new THREE.Vector3(...force.point).addScaledVector(surfaceNormal, contactLift),
+    [contactLift, force.point, surfaceNormal]
+  );
+  const guideMidpoint = useMemo(
+    () => contactPosition.clone().add(tipOutsideSurface).multiplyScalar(0.5),
+    [contactPosition, tipOutsideSurface]
+  );
+  const guideLength = useMemo(
+    () => Math.max(contactPosition.distanceTo(tipOutsideSurface), 0),
+    [contactPosition, tipOutsideSurface]
+  );
+  const arrowOrigin = useMemo(() => {
+    if (direction.dot(surfaceNormal) >= 0) {
+      return tipOutsideSurface.clone();
+    }
+    return tipOutsideSurface.clone().addScaledVector(direction, -arrowTravel);
+  }, [arrowTravel, direction, surfaceNormal, tipOutsideSurface]);
+  const arrowQuaternion = useMemo(() => {
     const q = new THREE.Quaternion();
     q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
     return q;
   }, [direction]);
+  const guideQuaternion = useMemo(() => {
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), surfaceNormal);
+    return q;
+  }, [surfaceNormal]);
+  const labelPosition = useMemo(() => {
+    const tipPosition =
+      direction.dot(surfaceNormal) >= 0
+        ? arrowOrigin.clone().addScaledVector(direction, arrowTravel)
+        : tipOutsideSurface.clone();
+    return tipPosition.addScaledVector(direction, forceScale * 0.03);
+  }, [arrowOrigin, arrowTravel, direction, forceScale, surfaceNormal, tipOutsideSurface]);
 
   return (
     <group
-      position={rootPosition}
-      quaternion={quaternion}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();
       }}
     >
       {guideLength > 1e-6 && (
-        <mesh position={[0, -guideLength * 0.5, 0]}>
+        <mesh position={guideMidpoint} quaternion={guideQuaternion} renderOrder={14}>
           <cylinderGeometry args={[guideRadius, guideRadius, guideLength, 10]} />
           <meshStandardMaterial
             color={selected ? "#ffd166" : "#f59e0b"}
@@ -467,7 +499,7 @@ function ForceArrow({
           />
         </mesh>
       )}
-      <mesh position={[0, -guideLength, 0]}>
+      <mesh position={contactPosition} renderOrder={15}>
         <sphereGeometry args={[contactRadius, 14, 14]} />
         <meshStandardMaterial
           color={selected ? "#ffe29a" : "#ffd166"}
@@ -476,25 +508,36 @@ function ForceArrow({
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[0, length * 0.42, 0]}>
-        <cylinderGeometry args={[shaftRadius, shaftRadius, length * 0.84, 12]} />
-        <meshStandardMaterial
-          color={selected ? "#ffd166" : "#ef476f"}
-          emissive={selected ? "#553100" : "#2f0d16"}
-          depthTest={false}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh position={[0, length * 0.84 + coneLength * 0.5, 0]}>
-        <coneGeometry args={[coneRadius, coneLength, 14]} />
-        <meshStandardMaterial
-          color={selected ? "#ffd166" : "#ef476f"}
-          emissive={selected ? "#553100" : "#2f0d16"}
-          depthTest={false}
-          depthWrite={false}
-        />
-      </mesh>
-      <Html position={[0, length + coneLength + scale * 0.025, 0]} center>
+      <group position={arrowOrigin} quaternion={arrowQuaternion}>
+        <mesh position={[0, tailRadius * 0.35, 0]} renderOrder={16}>
+          <sphereGeometry args={[tailRadius, 16, 16]} />
+          <meshStandardMaterial
+            color={selected ? "#ffd166" : "#ef476f"}
+            emissive={selected ? "#553100" : "#2f0d16"}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+        <mesh position={[0, shaftLength * 0.5, 0]} renderOrder={16}>
+          <cylinderGeometry args={[shaftRadius, shaftRadius, shaftLength, 12]} />
+          <meshStandardMaterial
+            color={selected ? "#ffd166" : "#ef476f"}
+            emissive={selected ? "#553100" : "#2f0d16"}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+        <mesh position={[0, shaftLength + coneLength * 0.5, 0]} renderOrder={16}>
+          <coneGeometry args={[coneRadius, coneLength, 14]} />
+          <meshStandardMaterial
+            color={selected ? "#ffd166" : "#ef476f"}
+            emissive={selected ? "#553100" : "#2f0d16"}
+            depthTest={false}
+            depthWrite={false}
+          />
+        </mesh>
+      </group>
+      <Html position={labelPosition} center>
         <span className="force-label">{force.label}</span>
       </Html>
     </group>
@@ -602,16 +645,16 @@ export function ViewerCanvas({
           {outcomeObject && renderOutcomeOverlay && (
             <OutcomeOverlay object={outcomeObject} wireframe={wireframe} />
           )}
+          {forces.map((force) => (
+            <ForceArrow
+              key={force.id}
+              force={force}
+              scale={forceScale}
+              selected={force.id === selectedForceId}
+              onSelect={() => onSelectForce(force.id)}
+            />
+          ))}
         </group>
-        {forces.map((force) => (
-          <ForceArrow
-            key={force.id}
-            force={force}
-            scale={forceScale}
-            selected={force.id === selectedForceId}
-            onSelect={() => onSelectForce(force.id)}
-          />
-        ))}
         <CameraAutoFit fitRootRef={fitRootRef} controlsRef={controlsRef} fitKey={fitKey} />
         <Environment preset="city" />
         <OrbitControls
