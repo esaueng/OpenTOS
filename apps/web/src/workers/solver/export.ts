@@ -20,10 +20,11 @@ export async function exportOutcomeGlb(
     preservedGeometry,
     new THREE.MeshStandardMaterial({
       color: 0x3bc282,
-      metalness: 0.18,
-      roughness: 0.58,
+      metalness: 0.06,
+      roughness: 0.82,
       transparent: true,
-      opacity: 0.36
+      opacity: 0.16,
+      depthWrite: false
     })
   );
   preserved.name = "preserved";

@@ -580,6 +580,17 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       }
     }
 
+    // Export the generated node without the locked preserve shell so the exact
+    // preserved interfaces remain visually distinct and are not double-skinned.
+    const generatedDomain = constrainedDomain.slice();
+    const generatedDensity = densityResult.density.slice();
+    for (let i = 0; i < generatedDomain.length; i += 1) {
+      if (preserveMask[i]) {
+        generatedDomain[i] = 0;
+        generatedDensity[i] = 0;
+      }
+    }
+
     const signature = computeSignature(densityResult.occupancy, constrainedDomain);
     const unique = isUniqueVariant(densityResult.occupancy, signature, acceptedVariants, constrainedDomain);
 
@@ -603,8 +614,8 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
     const generatedGeometry = extractIsoSurface(
       grid,
-      densityResult.density,
-      constrainedDomain,
+      generatedDensity,
+      generatedDomain,
       0.52,
       qualityConfig.taubinIterations
     );

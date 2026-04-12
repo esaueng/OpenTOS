@@ -556,10 +556,11 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
 
         if (node.name === "preserved") {
           material.color = new THREE.Color("#35d07f");
-          material.transparent = false;
-          material.opacity = 1;
-          material.metalness = 0.1;
-          material.roughness = 0.72;
+          material.transparent = true;
+          material.opacity = wireframe ? 0.28 : 0.18;
+          material.metalness = 0.06;
+          material.roughness = 0.82;
+          material.depthWrite = false;
         } else {
           material.color = new THREE.Color("#b6bac2");
           material.transparent = false;
@@ -568,9 +569,9 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
           material.roughness = 0.34;
           material.emissive = new THREE.Color("#141820");
           material.emissiveIntensity = 0.02;
+          material.depthWrite = true;
         }
         material.side = THREE.DoubleSide;
-        material.depthWrite = true;
         material.depthTest = true;
 
         material.needsUpdate = true;
