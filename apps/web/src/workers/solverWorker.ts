@@ -31,6 +31,7 @@ import { computeSignature, isUniqueVariant, variantParams } from "./solver/varia
 import {
   dilateMask,
   distanceFromMask,
+  erodeMask,
   forceSeedMask,
   rasterizePreservedMask,
   voxelizeDomain
@@ -357,6 +358,101 @@ function rasterizeConnectorMask(
   return mask;
 }
 
+function thresholdFromMaskedValues(
+  values: Float32Array,
+  sampleMask: Uint8Array,
+  domainMask: Uint8Array,
+  quantile: number
+): number {
+  const bins = 256;
+  const histogram = new Uint32Array(bins);
+  let total = 0;
+
+  for (let i = 0; i < values.length; i += 1) {
+    if (!domainMask[i] || !sampleMask[i]) {
+      continue;
+    }
+    const bin = Math.min(bins - 1, Math.max(0, Math.floor(clamp01(values[i]) * (bins - 1))));
+    histogram[bin] += 1;
+    total += 1;
+  }
+
+  if (total === 0) {
+    return 0.5;
+  }
+
+  const target = Math.max(1, Math.round(total * clamp01(quantile)));
+  let seen = 0;
+  for (let bin = 0; bin < bins; bin += 1) {
+    seen += histogram[bin];
+    if (seen >= target) {
+      return bin / (bins - 1);
+    }
+  }
+
+  return 0.5;
+}
+
+function retainConnectedToAnchorsLocal(
+  occupancy: Uint8Array,
+  domainMask: Uint8Array,
+  anchorMask: Uint8Array,
+  preserveMask: Uint8Array,
+  grid: ReturnType<typeof buildVoxelGrid>
+): Uint8Array {
+  const kept = new Uint8Array(occupancy.length);
+  const visited = new Uint8Array(occupancy.length);
+  const queue = new Int32Array(occupancy.length);
+  let head = 0;
+  let tail = 0;
+
+  const enqueue = (idx: number): void => {
+    if (visited[idx] || !domainMask[idx] || !occupancy[idx]) {
+      return;
+    }
+    visited[idx] = 1;
+    kept[idx] = 1;
+    queue[tail] = idx;
+    tail += 1;
+  };
+
+  for (let i = 0; i < occupancy.length; i += 1) {
+    if (anchorMask[i] || preserveMask[i]) {
+      enqueue(i);
+    }
+  }
+
+  while (head < tail) {
+    const idx = queue[head];
+    head += 1;
+    const z = Math.floor(idx / (grid.nx * grid.ny));
+    const y = Math.floor((idx - z * grid.nx * grid.ny) / grid.nx);
+    const x = idx - z * grid.nx * grid.ny - y * grid.nx;
+    const neighbors = [
+      [x + 1, y, z],
+      [x - 1, y, z],
+      [x, y + 1, z],
+      [x, y - 1, z],
+      [x, y, z + 1],
+      [x, y, z - 1]
+    ] as const;
+    for (const [nx, ny, nz] of neighbors) {
+      if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
+        continue;
+      }
+      enqueue(nx + grid.nx * (ny + grid.ny * nz));
+    }
+  }
+
+  for (let i = 0; i < preserveMask.length; i += 1) {
+    if (preserveMask[i]) {
+      kept[i] = 1;
+    }
+  }
+
+  return kept;
+}
+
 async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
   const request = payload.request;
   const warnings: string[] = [];
@@ -528,7 +624,8 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   while (outcomes.length < request.targets.outcomeCount && attempt < maxAttempts) {
     const params = variantParams(outcomes.length, request.targets.outcomeCount, qualityConfig.minThicknessVoxels, attempt);
-    params.targetVolumeFraction = clamp01(targetFraction + (params.targetVolumeFraction - 0.22) * 0.55);
+    const goalDrivenFraction = clamp01(0.08 + targetFraction * 0.44);
+    params.targetVolumeFraction = clamp01(goalDrivenFraction + (params.targetVolumeFraction - 0.18) * 0.82);
     const influence = combineInfluenceFields(baseFields, constrainedDomain, params, request.targets.safetyFactor);
     if (trussBoostField) {
       for (let i = 0; i < influence.length; i += 1) {
@@ -545,12 +642,20 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       const surfaceDepth = Math.min(surfaceDistance[i], 6);
       const shellPenalty = Math.exp(-surfaceDepth / 1.4);
       const protectedBand = Math.max(
-        Math.exp(-preservedDistance[i] * 0.45),
-        Math.exp(-forceDistance[i] * 0.45)
+        Math.exp(-preservedDistance[i] * 0.95),
+        Math.exp(-forceDistance[i] * 0.9)
       );
+      const corridorBias = trussBoostField ? trussBoostField[i] : 0;
       const attenuation = 1 - shellPenalty * (1 - protectedBand) * (0.82 + params.voidBias * 0.55);
       const coreBoost = clamp01((surfaceDepth - 1.2) / 4.2) * (0.16 + params.medialWeight * 0.12);
-      influence[i] = clamp01(influence[i] * attenuation + coreBoost);
+      let shaped = influence[i] * attenuation + coreBoost;
+      if (surfaceDepth < 1.25) {
+        shaped *= 0.28 + Math.max(corridorBias * 1.35, protectedBand * 0.78);
+      }
+      if (surfaceDepth < 0.8 && corridorBias < 0.24 && protectedBand < 0.58) {
+        shaped *= 0.18;
+      }
+      influence[i] = clamp01(shaped);
     }
 
     const densityResult = solveDensityField({
@@ -580,15 +685,59 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       }
     }
 
-    // Export the generated node without the locked preserve shell so the exact
-    // preserved interfaces remain visually distinct and are not double-skinned.
-    const generatedDomain = constrainedDomain.slice();
-    const generatedDensity = densityResult.density.slice();
-    for (let i = 0; i < generatedDomain.length; i += 1) {
-      if (preserveMask[i]) {
-        generatedDomain[i] = 0;
-        generatedDensity[i] = 0;
+    const influenceThreshold = thresholdFromMaskedValues(influence, densityResult.occupancy, constrainedDomain, 0.66);
+    const corridorThreshold = trussBoostField
+      ? thresholdFromMaskedValues(trussBoostField, densityResult.occupancy, constrainedDomain, 0.72)
+      : influenceThreshold;
+    for (let i = 0; i < densityResult.occupancy.length; i += 1) {
+      if (!densityResult.occupancy[i] || !constrainedDomain[i] || preserveMask[i]) {
+        continue;
       }
+      const collar = preservedDistance[i] <= 1.8 || forceDistance[i] <= 1.6;
+      const corridor = trussBoostField ? trussBoostField[i] >= corridorThreshold : false;
+      const interiorSpine = influence[i] >= influenceThreshold && surfaceDistance[i] > 0.75;
+      const deepCore = surfaceDistance[i] > 1.45 && influence[i] >= influenceThreshold * 0.82;
+      if (!(collar || corridor || interiorSpine || deepCore)) {
+        densityResult.occupancy[i] = 0;
+        densityResult.density[i] = Math.min(densityResult.density[i], 0.42);
+      }
+    }
+    let refinedOccupancy = retainConnectedToAnchorsLocal(
+      densityResult.occupancy,
+      constrainedDomain,
+      forceSeeds,
+      preserveMask,
+      grid
+    );
+    refinedOccupancy = erodeMask(dilateMask(refinedOccupancy, grid, 1), grid, 1);
+    refinedOccupancy = retainConnectedToAnchorsLocal(
+      refinedOccupancy,
+      constrainedDomain,
+      forceSeeds,
+      preserveMask,
+      grid
+    );
+    densityResult.occupancy = refinedOccupancy;
+    for (let i = 0; i < densityResult.density.length; i += 1) {
+      if (densityResult.occupancy[i]) {
+        densityResult.density[i] = Math.max(densityResult.density[i], 0.64);
+      } else if (!preserveMask[i]) {
+        densityResult.density[i] = Math.min(densityResult.density[i], 0.4);
+      }
+    }
+
+    // Reconstruct only from retained generated occupancy. Meshing the entire
+    // constrained domain lets low-density shell remnants bleed back into the
+    // final surface, which makes outcomes look like the source part instead of
+    // a carved load path.
+    const generatedDomain = new Uint8Array(constrainedDomain.length);
+    const generatedDensity = new Float32Array(densityResult.density.length);
+    for (let i = 0; i < generatedDomain.length; i += 1) {
+      if (preserveMask[i] || !densityResult.occupancy[i]) {
+        continue;
+      }
+      generatedDomain[i] = 1;
+      generatedDensity[i] = Math.max(0.72, densityResult.density[i]);
     }
 
     const signature = computeSignature(densityResult.occupancy, constrainedDomain);
