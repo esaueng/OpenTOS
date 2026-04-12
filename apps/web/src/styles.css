@@ -280,13 +280,16 @@ progress {
 }
 
 .force-label {
-  color: #ffe3a5;
-  font-size: 0.66rem;
-  background: rgba(10, 16, 27, 0.86);
-  border: 1px solid rgba(255, 209, 102, 0.5);
+  color: #fff0c7;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(10, 16, 27, 0.94);
+  border: 1px solid rgba(255, 209, 102, 0.58);
   border-radius: 999px;
-  padding: 0.1rem 0.34rem;
+  padding: 0.14rem 0.42rem;
   white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
 }
 
 .outcomes-panel {
