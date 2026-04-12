@@ -51,6 +51,22 @@ type ProgressArgs = {
   etaSeconds?: number;
 };
 
+type SolverTarget = PreservedTarget & {
+  groupId: number;
+  role: "center" | "anchor";
+};
+
+type InterfaceProfile = {
+  groupId: number;
+  center: [number, number, number];
+  axis: [number, number, number];
+  u: [number, number, number];
+  v: [number, number, number];
+  radiusU: number;
+  radiusV: number;
+  weight: number;
+};
+
 function postMessageTyped(message: WorkerOutMessage): void {
   self.postMessage(message);
 }
@@ -141,6 +157,245 @@ function pointDistanceSquared(a: [number, number, number], b: [number, number, n
   return dx * dx + dy * dy + dz * dz;
 }
 
+function dot3(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function length3(v: [number, number, number]): number {
+  return Math.hypot(v[0], v[1], v[2]);
+}
+
+function normalize3(v: [number, number, number], fallback: [number, number, number] = [0, 0, 1]): [number, number, number] {
+  const len = length3(v);
+  if (len <= 1e-9) {
+    return [...fallback];
+  }
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+function cross3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+
+function subtract3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function addScaled3(
+  base: [number, number, number],
+  dir: [number, number, number],
+  scale: number
+): [number, number, number] {
+  return [base[0] + dir[0] * scale, base[1] + dir[1] * scale, base[2] + dir[2] * scale];
+}
+
+function projectOntoPlane(
+  v: [number, number, number],
+  normal: [number, number, number]
+): [number, number, number] {
+  const d = dot3(v, normal);
+  return [v[0] - normal[0] * d, v[1] - normal[1] * d, v[2] - normal[2] * d];
+}
+
+function orthonormalFallback(axis: [number, number, number]): {
+  u: [number, number, number];
+  v: [number, number, number];
+} {
+  const ref: [number, number, number] = Math.abs(axis[2]) < 0.82 ? [0, 0, 1] : [0, 1, 0];
+  const u = normalize3(cross3(ref, axis), [1, 0, 0]);
+  const v = normalize3(cross3(axis, u), [0, 1, 0]);
+  return { u, v };
+}
+
+function jacobiEigenSymmetric3(matrix: number[][]): {
+  values: [number, number, number];
+  vectors: [[number, number, number], [number, number, number], [number, number, number]];
+} {
+  const a = matrix.map((row) => [...row]);
+  const v = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]
+  ];
+
+  for (let iter = 0; iter < 16; iter += 1) {
+    let p = 0;
+    let q = 1;
+    let max = Math.abs(a[0][1]);
+    if (Math.abs(a[0][2]) > max) {
+      p = 0;
+      q = 2;
+      max = Math.abs(a[0][2]);
+    }
+    if (Math.abs(a[1][2]) > max) {
+      p = 1;
+      q = 2;
+      max = Math.abs(a[1][2]);
+    }
+    if (max <= 1e-10) {
+      break;
+    }
+
+    const app = a[p][p];
+    const aqq = a[q][q];
+    const apq = a[p][q];
+    const phi = 0.5 * Math.atan2(2 * apq, aqq - app);
+    const c = Math.cos(phi);
+    const s = Math.sin(phi);
+
+    for (let r = 0; r < 3; r += 1) {
+      if (r !== p && r !== q) {
+        const arp = a[r][p];
+        const arq = a[r][q];
+        a[r][p] = arp * c - arq * s;
+        a[p][r] = a[r][p];
+        a[r][q] = arq * c + arp * s;
+        a[q][r] = a[r][q];
+      }
+    }
+
+    a[p][p] = app * c * c - 2 * apq * s * c + aqq * s * s;
+    a[q][q] = aqq * c * c + 2 * apq * s * c + app * s * s;
+    a[p][q] = 0;
+    a[q][p] = 0;
+
+    for (let r = 0; r < 3; r += 1) {
+      const vrp = v[r][p];
+      const vrq = v[r][q];
+      v[r][p] = vrp * c - vrq * s;
+      v[r][q] = vrq * c + vrp * s;
+    }
+  }
+
+  const eig = [
+    { value: a[0][0], vector: normalize3([v[0][0], v[1][0], v[2][0]], [1, 0, 0]) },
+    { value: a[1][1], vector: normalize3([v[0][1], v[1][1], v[2][1]], [0, 1, 0]) },
+    { value: a[2][2], vector: normalize3([v[0][2], v[1][2], v[2][2]], [0, 0, 1]) }
+  ].sort((left, right) => left.value - right.value);
+
+  return {
+    values: [eig[0].value, eig[1].value, eig[2].value],
+    vectors: [eig[0].vector, eig[1].vector, eig[2].vector]
+  };
+}
+
+function buildInterfaceProfiles(positions: Float32Array, groups: number[][]): InterfaceProfile[] {
+  return groups
+    .map((group, groupId) => {
+      if (!group.length) {
+        return null;
+      }
+
+      const samples: Array<[number, number, number]> = [];
+      let sx = 0;
+      let sy = 0;
+      let sz = 0;
+      for (const faceIndex of group) {
+        const center = faceCenter(positions, faceIndex);
+        samples.push(center);
+        sx += center[0];
+        sy += center[1];
+        sz += center[2];
+      }
+
+      const inv = 1 / samples.length;
+      const center: [number, number, number] = [sx * inv, sy * inv, sz * inv];
+
+      let cxx = 0;
+      let cxy = 0;
+      let cxz = 0;
+      let cyy = 0;
+      let cyz = 0;
+      let czz = 0;
+      for (const sample of samples) {
+        const dx = sample[0] - center[0];
+        const dy = sample[1] - center[1];
+        const dz = sample[2] - center[2];
+        cxx += dx * dx;
+        cxy += dx * dy;
+        cxz += dx * dz;
+        cyy += dy * dy;
+        cyz += dy * dz;
+        czz += dz * dz;
+      }
+      const covariance = [
+        [cxx * inv, cxy * inv, cxz * inv],
+        [cxy * inv, cyy * inv, cyz * inv],
+        [cxz * inv, cyz * inv, czz * inv]
+      ];
+      const eig = jacobiEigenSymmetric3(covariance);
+      const axis = normalize3(eig.vectors[0], [0, 0, 1]);
+      let u = normalize3(eig.vectors[2], [1, 0, 0]);
+      let v = normalize3(eig.vectors[1], [0, 1, 0]);
+      if (length3(cross3(u, v)) <= 1e-6) {
+        const fallback = orthonormalFallback(axis);
+        u = fallback.u;
+        v = fallback.v;
+      }
+      if (dot3(cross3(u, v), axis) < 0) {
+        v = [-v[0], -v[1], -v[2]];
+      }
+
+      let radiusU = 0;
+      let radiusV = 0;
+      for (const sample of samples) {
+        const delta = subtract3(sample, center);
+        radiusU = Math.max(radiusU, Math.abs(dot3(delta, u)));
+        radiusV = Math.max(radiusV, Math.abs(dot3(delta, v)));
+      }
+
+      const fallbackRadius = Math.max(radiusU, radiusV, 1e-3);
+      return {
+        groupId,
+        center,
+        axis,
+        u,
+        v,
+        radiusU: Math.max(radiusU, fallbackRadius * 0.72),
+        radiusV: Math.max(radiusV, fallbackRadius * 0.72),
+        weight: Math.min(1.8, Math.max(0.6, Math.sqrt(group.length) * 0.14))
+      };
+    })
+    .filter((value): value is InterfaceProfile => value !== null);
+}
+
+function buildSolverTargets(profiles: InterfaceProfile[]): SolverTarget[] {
+  const targets: SolverTarget[] = [];
+  for (const profile of profiles) {
+    targets.push({
+      point: profile.center,
+      weight: profile.weight * 0.92,
+      groupId: profile.groupId,
+      role: "center"
+    });
+
+    const anchors: Array<{ dir: [number, number, number]; radius: number }> = [
+      { dir: profile.u, radius: profile.radiusU },
+      { dir: [-profile.u[0], -profile.u[1], -profile.u[2]], radius: profile.radiusU },
+      { dir: profile.v, radius: profile.radiusV },
+      { dir: [-profile.v[0], -profile.v[1], -profile.v[2]], radius: profile.radiusV }
+    ];
+
+    for (const anchor of anchors) {
+      if (anchor.radius <= 1e-4) {
+        continue;
+      }
+      targets.push({
+        point: addScaled3(profile.center, anchor.dir, anchor.radius * 1.08),
+        weight: profile.weight * 1.08,
+        groupId: profile.groupId,
+        role: "anchor"
+      });
+    }
+  }
+
+  return targets;
+}
+
 function distanceToSegmentSquared(
   point: [number, number, number],
   start: [number, number, number],
@@ -164,7 +419,7 @@ function buildTrussBoostField(
   grid: ReturnType<typeof buildVoxelGrid>,
   domainMask: Uint8Array,
   surfaceDistance: Float32Array,
-  preservedTargets: PreservedTarget[],
+  preservedTargets: SolverTarget[],
   forces: ForceVec[]
 ): Float32Array {
   const out = new Float32Array(grid.total);
@@ -180,8 +435,9 @@ function buildTrussBoostField(
         idx,
         dist2: idx === i ? Number.POSITIVE_INFINITY : pointDistanceSquared(preservedTargets[i].point, target.point)
       }))
+      .filter((entry) => preservedTargets[entry.idx].groupId !== preservedTargets[i].groupId)
       .sort((a, b) => a.dist2 - b.dist2)
-      .slice(0, Math.min(2, preservedTargets.length - 1));
+      .slice(0, preservedTargets[i].role === "anchor" ? 2 : 1);
     for (const entry of nearest) {
       const left = Math.min(i, entry.idx);
       const right = Math.max(i, entry.idx);
@@ -202,7 +458,7 @@ function buildTrussBoostField(
     const nearestTargets = preservedTargets
       .map((target) => ({ target, dist2: pointDistanceSquared(force.point, target.point) }))
       .sort((a, b) => a.dist2 - b.dist2)
-      .slice(0, Math.min(2, preservedTargets.length));
+      .slice(0, Math.min(3, preservedTargets.length));
     for (const entry of nearestTargets) {
       segments.push({
         start: force.point,
@@ -253,58 +509,50 @@ function buildTrussBoostField(
 }
 
 function buildConnectorSegments(
-  preservedTargets: PreservedTarget[],
+  preservedTargets: SolverTarget[],
   forces: ForceVec[]
 ): Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> {
   const segments: Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> = [];
-  if (preservedTargets.length >= 2) {
-    const used = new Array(preservedTargets.length).fill(false);
-    used[0] = true;
-    for (let step = 1; step < preservedTargets.length; step += 1) {
-      let bestA = -1;
-      let bestB = -1;
-      let bestDist = Number.POSITIVE_INFINITY;
-      for (let i = 0; i < preservedTargets.length; i += 1) {
-        if (!used[i]) continue;
-        for (let j = 0; j < preservedTargets.length; j += 1) {
-          if (used[j]) continue;
-          const dist2 = pointDistanceSquared(preservedTargets[i].point, preservedTargets[j].point);
-          if (dist2 < bestDist) {
-            bestDist = dist2;
-            bestA = i;
-            bestB = j;
-          }
-        }
+  const pairKeys = new Set<string>();
+  for (let i = 0; i < preservedTargets.length; i += 1) {
+    const nearest = preservedTargets
+      .map((target, idx) => ({
+        idx,
+        dist2: idx === i ? Number.POSITIVE_INFINITY : pointDistanceSquared(preservedTargets[i].point, target.point)
+      }))
+      .filter((entry) => preservedTargets[entry.idx].groupId !== preservedTargets[i].groupId)
+      .sort((a, b) => a.dist2 - b.dist2)
+      .slice(0, preservedTargets[i].role === "anchor" ? 2 : 1);
+
+    for (const entry of nearest) {
+      const left = Math.min(i, entry.idx);
+      const right = Math.max(i, entry.idx);
+      const key = `${left}:${right}`;
+      if (pairKeys.has(key)) {
+        continue;
       }
-      if (bestA >= 0 && bestB >= 0) {
-        used[bestB] = true;
-        segments.push({
-          start: preservedTargets[bestA].point,
-          end: preservedTargets[bestB].point,
-          weight: Math.sqrt(
-            Math.max(preservedTargets[bestA].weight * preservedTargets[bestB].weight, 0.25)
-          )
-        });
-      }
+      pairKeys.add(key);
+      segments.push({
+        start: preservedTargets[left].point,
+        end: preservedTargets[right].point,
+        weight: Math.sqrt(Math.max(preservedTargets[left].weight * preservedTargets[right].weight, 0.25))
+      });
     }
   }
 
   for (const force of forces) {
     if (!preservedTargets.length) break;
-    let bestIdx = 0;
-    let bestDist = pointDistanceSquared(force.point, preservedTargets[0].point);
-    for (let i = 1; i < preservedTargets.length; i += 1) {
-      const dist2 = pointDistanceSquared(force.point, preservedTargets[i].point);
-      if (dist2 < bestDist) {
-        bestDist = dist2;
-        bestIdx = i;
-      }
+    const nearestTargets = preservedTargets
+      .map((target, idx) => ({ idx, dist2: pointDistanceSquared(force.point, target.point) }))
+      .sort((a, b) => a.dist2 - b.dist2)
+      .slice(0, Math.min(3, preservedTargets.length));
+    for (const entry of nearestTargets) {
+      segments.push({
+        start: force.point,
+        end: preservedTargets[entry.idx].point,
+        weight: Math.max(0.7, Math.sqrt(preservedTargets[entry.idx].weight) * 0.9)
+      });
     }
-    segments.push({
-      start: force.point,
-      end: preservedTargets[bestIdx].point,
-      weight: Math.max(0.7, Math.sqrt(preservedTargets[bestIdx].weight) * 0.9)
-    });
   }
 
   return segments;
@@ -567,27 +815,8 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
   const forceDistance = distanceFromMask(forceSeeds, constrainedDomain, grid);
   const surfaceDistance = distanceFromMask(surfaceMask, constrainedDomain, grid);
 
-  const preservedTargets = preservedData.groups
-    .map((group) => {
-      if (!group.length) {
-        return null;
-      }
-      let sx = 0;
-      let sy = 0;
-      let sz = 0;
-      for (const faceIndex of group) {
-        const [cx, cy, cz] = faceCenter(positions, faceIndex);
-        sx += cx;
-        sy += cy;
-        sz += cz;
-      }
-      const inv = 1 / group.length;
-      return {
-        point: [sx * inv, sy * inv, sz * inv] as [number, number, number],
-        weight: Math.min(1.8, Math.max(0.6, Math.sqrt(group.length) * 0.14))
-      };
-    })
-    .filter((value): value is { point: [number, number, number]; weight: number } => value !== null);
+  const interfaceProfiles = buildInterfaceProfiles(positions, preservedData.groups);
+  const preservedTargets = buildSolverTargets(interfaceProfiles);
   const trussBoostField =
     preservedTargets.length >= 2
       ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces)
