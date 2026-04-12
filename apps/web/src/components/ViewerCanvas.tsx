@@ -57,6 +57,18 @@ interface EditablePartProps {
   onPlaceForce: (point: [number, number, number], normal: [number, number, number]) => void;
 }
 
+function sameFaceSelection(left: number[], right: number[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface CameraAutoFitProps {
   fitRootRef: React.RefObject<THREE.Group>;
   controlsRef: React.RefObject<OrbitControlsImpl | null>;
@@ -124,6 +136,7 @@ function EditablePart({
   const meshRef = useRef<THREE.Mesh>(null);
   const lastPreservedFacesRef = useRef<number[]>([]);
   const [isPainting, setIsPainting] = useState(false);
+  const [hoverFaces, setHoverFaces] = useState<number[]>([]);
 
   const editableGeometry = useMemo(() => {
     const local = geometry.index ? geometry.toNonIndexed() : geometry.clone();
@@ -153,10 +166,18 @@ function EditablePart({
     const posCount = editableGeometry.attributes.position.count;
     const colors = new Float32Array(posCount * 3);
     const color = new THREE.Color();
+    const previewColor = new THREE.Color();
+    const hoverSet = new Set(hoverFaces);
 
     for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
       const label = faceLabels[faceIndex] ?? "design";
       color.set(LABEL_COLORS[label]);
+      if (hoverSet.has(faceIndex) && paintLabel) {
+        previewColor
+          .set(LABEL_COLORS[paintLabel === "design" ? "unassigned" : paintLabel])
+          .lerp(new THREE.Color("#ffffff"), 0.42);
+        color.lerp(previewColor, 0.72);
+      }
       for (let localVertex = 0; localVertex < 3; localVertex += 1) {
         const vertexIndex = faceIndex * 3 + localVertex;
         colors[vertexIndex * 3] = color.r;
@@ -167,7 +188,7 @@ function EditablePart({
 
     editableGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     editableGeometry.attributes.color.needsUpdate = true;
-  }, [editableGeometry, faceCount, faceLabels]);
+  }, [editableGeometry, faceCount, faceLabels, hoverFaces, paintLabel]);
 
   useEffect(() => {
     return () => {
@@ -198,6 +219,53 @@ function EditablePart({
     onPaintFaces(targets, paintLabel);
   };
 
+  const resolveFacesAtRay = (
+    ray: THREE.Ray,
+    fallbackFaceIndex: number | null,
+    label: RegionLabel
+  ): number[] => {
+    const candidateFaceIndices =
+      meshRef.current != null
+        ? (() => {
+            const raycaster = new THREE.Raycaster(ray.origin.clone(), ray.direction.clone());
+            (raycaster as THREE.Raycaster & { firstHitOnly?: boolean }).firstHitOnly = false;
+            const intersections = raycaster.intersectObject(meshRef.current, false);
+            return Array.from(
+              new Set(
+                intersections
+                  .map((intersection) => intersection.faceIndex)
+                  .filter((faceIndex): faceIndex is number => faceIndex != null && faceIndex >= 0 && faceIndex < faceCount)
+              )
+            );
+          })()
+        : [];
+
+    if (candidateFaceIndices.length === 0 && (fallbackFaceIndex == null || fallbackFaceIndex < 0 || fallbackFaceIndex >= faceCount)) {
+      return [];
+    }
+
+    if (label === "preserved" || label === "fixed") {
+      return resolvePreservedSurfaceSelectionFromCandidates(
+        candidateFaceIndices.length > 0 ? candidateFaceIndices : [fallbackFaceIndex as number],
+        surfaceTopology,
+        ray.clone()
+      );
+    }
+
+    if (fallbackFaceIndex == null || fallbackFaceIndex < 0 || fallbackFaceIndex >= surfaceTopology.faceCenters.length) {
+      return [];
+    }
+
+    const origin = surfaceTopology.faceCenters[fallbackFaceIndex];
+    const targets: number[] = [];
+    for (let i = 0; i < surfaceTopology.faceCenters.length; i += 1) {
+      if (origin.distanceTo(surfaceTopology.faceCenters[i]) <= brushRadiusWorld) {
+        targets.push(i);
+      }
+    }
+    return targets;
+  };
+
   const placeForce = (event: ThreeEvent<MouseEvent>) => {
     if (!placeForceMode) {
       return;
@@ -218,39 +286,17 @@ function EditablePart({
     event: ThreeEvent<PointerEvent> | ThreeEvent<MouseEvent>,
     label: "preserved" | "fixed" | "design"
   ): void => {
-    const fallbackFaceIndex = event.faceIndex;
+    const fallbackFaceIndex = event.faceIndex ?? null;
+    const resolvedFaces = resolveFacesAtRay(event.ray.clone(), fallbackFaceIndex, label);
     const candidateFaceIndices =
-      meshRef.current != null
-        ? (() => {
-            const raycaster = new THREE.Raycaster(event.ray.origin.clone(), event.ray.direction.clone());
-            (raycaster as THREE.Raycaster & { firstHitOnly?: boolean }).firstHitOnly = false;
-            const intersections = raycaster.intersectObject(meshRef.current, false);
-            return Array.from(
-              new Set(
-                intersections
-                  .map((intersection) => intersection.faceIndex)
-                  .filter((faceIndex): faceIndex is number => faceIndex != null && faceIndex >= 0 && faceIndex < faceCount)
-              )
-            );
-          })()
-        : [];
-
-    if (candidateFaceIndices.length === 0 && (fallbackFaceIndex == null || fallbackFaceIndex < 0 || fallbackFaceIndex >= faceCount)) {
-      return;
-    }
-
-    const faceIndicesToResolve =
-      candidateFaceIndices.length > 0
-        ? candidateFaceIndices
-        : [fallbackFaceIndex as number];
-    const resolvedFaces = resolvePreservedSurfaceSelectionFromCandidates(
-      faceIndicesToResolve,
-      surfaceTopology,
-      event.ray.clone()
-    );
+      resolvedFaces.length > 0
+        ? resolvedFaces
+        : fallbackFaceIndex != null
+          ? [fallbackFaceIndex]
+          : [];
     const preservedCandidateFace =
       resolvedFaces.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed") ??
-      faceIndicesToResolve.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
+      candidateFaceIndices.find((faceIndex) => faceLabels[faceIndex] === "preserved" || faceLabels[faceIndex] === "fixed");
     const facesToApply =
       label === "design"
         ? preservedCandidateFace != null
@@ -268,11 +314,23 @@ function EditablePart({
     }
     if (label === "preserved" || label === "fixed") {
       lastPreservedFacesRef.current = facesToApply;
+      setHoverFaces(facesToApply);
     } else if (label === "design") {
       lastPreservedFacesRef.current = [];
+      setHoverFaces([]);
     }
     onPaintFaces(facesToApply, label);
   };
+
+  useEffect(() => {
+    if (!paintLabel || placeForceMode) {
+      setHoverFaces([]);
+      return;
+    }
+    if (paintLabel === "preserved" || paintLabel === "fixed") {
+      setIsPainting(false);
+    }
+  }, [paintLabel, placeForceMode]);
 
   useEffect(() => {
     if ((paintLabel !== "preserved" && paintLabel !== "fixed") || placeForceMode) {
@@ -365,7 +423,7 @@ function EditablePart({
       ref={meshRef}
       geometry={editableGeometry}
       onPointerDown={(event) => {
-        if (!placeForceMode && paintLabel) {
+        if (!placeForceMode && paintLabel && paintLabel !== "preserved" && paintLabel !== "fixed") {
           if (event.button !== 0) {
             return;
           }
@@ -374,12 +432,19 @@ function EditablePart({
         }
       }}
       onPointerMove={(event) => {
+        if (paintLabel && !placeForceMode) {
+          const previewFaces = resolveFacesAtRay(event.ray.clone(), event.faceIndex ?? null, paintLabel);
+          setHoverFaces((current) => (sameFaceSelection(current, previewFaces) ? current : previewFaces));
+        }
         if (isPainting) {
           paint(event);
         }
       }}
       onPointerUp={() => setIsPainting(false)}
-      onPointerLeave={() => setIsPainting(false)}
+      onPointerLeave={() => {
+        setIsPainting(false);
+        setHoverFaces([]);
+      }}
       onClick={(event) => {
         if (placeForceMode) {
           placeForce(event);
