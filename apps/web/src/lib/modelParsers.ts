@@ -15,7 +15,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function collectMergedSceneGeometry(object: THREE.Object3D): THREE.BufferGeometry | null {
+export function collectMergedSceneGeometry(object: THREE.Object3D): THREE.BufferGeometry | null {
   const geometries: THREE.BufferGeometry[] = [];
   object.updateWorldMatrix(true, true);
 
