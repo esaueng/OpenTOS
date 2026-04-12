@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import base64
+import time
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.main import create_app
 
 
@@ -186,3 +193,68 @@ def test_outcomes_and_benchmark_endpoints() -> None:
         assert benchmark_response.status_code == 200
         benchmark_payload = benchmark_response.json()
         assert benchmark_payload["id"] == "connecting-rod"
+
+
+def test_benchmark_sample_study_runs_end_to_end(tmp_path) -> None:
+    old_data_root = settings.data_root
+    old_studies_root = settings.studies_root
+    old_sqlite_path = settings.sqlite_path
+    old_max_workers = settings.max_workers
+
+    settings.data_root = tmp_path / "data"
+    settings.studies_root = settings.data_root / "studies"
+    settings.sqlite_path = settings.data_root / "opentos.db"
+    settings.max_workers = 1
+
+    try:
+        app = create_app()
+        sample_obj = Path(__file__).resolve().parents[3] / "assets" / "samples" / "connecting_rod_sample.obj"
+        model_b64 = base64.b64encode(sample_obj.read_bytes()).decode("utf-8")
+
+        with TestClient(app) as client:
+            benchmark_response = client.get("/api/benchmarks/connecting-rod")
+            assert benchmark_response.status_code == 200
+            benchmark = benchmark_response.json()
+
+            study_request = {
+                **benchmark["defaultStudy"],
+                "model": {"format": "obj", "dataBase64": model_b64},
+            }
+
+            create_response = client.post("/api/studies", json=study_request)
+            assert create_response.status_code == 200
+            study_id = create_response.json()["study"]["id"]
+
+            run_response = client.post(
+                f"/api/studies/{study_id}/run",
+                json={"qualityProfile": "fast-preview", "outcomeCountOverride": 1, "seed": 0},
+            )
+            assert run_response.status_code == 200
+            job_id = run_response.json()["jobId"]
+
+            deadline = time.time() + 45
+            final_payload = None
+            while time.time() < deadline:
+                status_response = client.get(f"/api/jobs/{job_id}")
+                assert status_response.status_code == 200
+                payload = status_response.json()
+                if payload["status"] in {"succeeded", "failed", "canceled"}:
+                    final_payload = payload
+                    break
+                time.sleep(0.25)
+
+            assert final_payload is not None, "job did not finish before timeout"
+            assert final_payload["status"] == "succeeded", final_payload.get("error") or final_payload.get("warnings")
+            assert final_payload["outcomes"]
+            assert final_payload["outcomes"][0]["optimizedModel"]["format"] == "glb"
+            assert final_payload["outcomes"][0]["metrics"]["volume"] > 0
+
+            outcomes_response = client.get(f"/api/studies/{study_id}/outcomes")
+            assert outcomes_response.status_code == 200
+            outcomes_payload = outcomes_response.json()
+            assert len(outcomes_payload["outcomes"]) >= 1
+    finally:
+        settings.data_root = old_data_root
+        settings.studies_root = old_studies_root
+        settings.sqlite_path = old_sqlite_path
+        settings.max_workers = old_max_workers
