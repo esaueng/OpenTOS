@@ -163,6 +163,12 @@ def _safe_volume(mesh: trimesh.Trimesh) -> float:
     return abs(volume)
 
 
+def _cleanup_mesh_faces(mesh: trimesh.Trimesh) -> None:
+    mesh.update_faces(mesh.unique_faces())
+    mesh.update_faces(mesh.nondegenerate_faces())
+    mesh.remove_unreferenced_vertices()
+
+
 class FusionApproxSolver:
     solver_version = "opentos-v2.0.0-browser-parity"
 
@@ -170,8 +176,7 @@ class FusionApproxSolver:
         progress("parse", 0.04)
 
         mesh = study.mesh.copy()
-        mesh.remove_duplicate_faces()
-        mesh.remove_unreferenced_vertices()
+        _cleanup_mesh_faces(mesh)
 
         pitch = _choose_pitch(mesh)
         voxelized = mesh.voxelized(pitch).fill()
@@ -369,9 +374,7 @@ class FusionApproxSolver:
             if generated_m.faces.shape[0] < 200:
                 continue
 
-            generated_m.remove_degenerate_faces()
-            generated_m.remove_duplicate_faces()
-            generated_m.remove_unreferenced_vertices()
+            _cleanup_mesh_faces(generated_m)
             trimesh.smoothing.filter_taubin(generated_m, lamb=0.5, nu=-0.53, iterations=11)
 
             generated_src = generated_m.copy()
