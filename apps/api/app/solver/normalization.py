@@ -19,6 +19,10 @@ def _to_mesh(payload: bytes, model_format: str) -> trimesh.Trimesh:
     loaded = trimesh.load(io.BytesIO(payload), file_type=model_format)
 
     if isinstance(loaded, trimesh.Scene):
+        flattened = loaded.dump(concatenate=True)
+        if isinstance(flattened, trimesh.Trimesh):
+            return flattened
+
         geom = [g for g in loaded.geometry.values() if isinstance(g, trimesh.Trimesh)]
         if not geom:
             raise HTTPException(status_code=400, detail="Uploaded model did not contain mesh geometry")

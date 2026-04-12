@@ -4,6 +4,7 @@
 
 - React + TypeScript + Vite.
 - TypeScript is the only tracked source of truth for the web app; generated JS is not kept in `src/`.
+- Browser-local solve is the canonical runtime; API execution is optional offload/reference.
 - `@react-three/fiber` viewer with face brush painting for design/preserved/fixed/obstacle labeling.
 - Force placement by clicking mesh surfaces and editing direction/magnitude in-panel.
 - Outcome grid supports side-by-side comparison with thumbnail previews and metric cards.
@@ -35,6 +36,7 @@
 - Voxelization and structural proxy field synthesis (connectivity + directional load influence).
 - Iterative topology loop with smoothing, carve, and connectivity retention.
 - Marching reconstruction and GLB scene export with `preserved` + `generated` nodes.
+- Browser worker and API solver follow the same stage model and both reconstruct generated geometry from voxel occupancy rather than switching to a separate truss-mesh pipeline.
 
 ## Extensibility
 

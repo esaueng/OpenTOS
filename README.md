@@ -50,9 +50,9 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
-### Browser-Only Solver Mode (No Backend Required)
+### Browser-First Runtime (No Backend Required)
 
-The web app now supports local in-browser solving through a Web Worker.
+The product default is local in-browser solving through a Web Worker. The FastAPI service is optional offload/reference execution, not the primary deployment requirement.
 
 - Default mode: `browser`
 - Optional API mode: set `VITE_SOLVER_MODE=api`

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 
+import trimesh
+
 from app.models.contracts import RunOptions, StudyCreateRequest
 from app.solver.normalization import DISTANCE_TO_M, FORCE_TO_N, normalize_study
 
@@ -46,3 +48,37 @@ def test_normalization_converts_units_forces_and_constraints() -> None:
     assert len(out.load_cases) == 1
     assert abs(out.load_cases[0].forces[0].magnitude_n - 10 * FORCE_TO_N["lb"]) < 1e-8
     assert abs(out.mesh.extents.max() - 10 * DISTANCE_TO_M["mm"]) < 1e-6
+
+
+def test_normalization_flattens_scene_transforms_for_glb_inputs() -> None:
+    left = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    right = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    right.apply_translation((3.0, 0.0, 0.0))
+
+    scene = trimesh.Scene()
+    scene.add_geometry(left, node_name="left")
+    scene.add_geometry(right, node_name="right")
+
+    glb_b64 = base64.b64encode(scene.export(file_type="glb")).decode("utf-8")
+
+    req = StudyCreateRequest(
+        model={"format": "glb", "dataBase64": glb_b64},
+        units="m",
+        designRegion={"faceIndices": list(range(24))},
+        preservedRegions=[{"id": "mountA", "faceIndices": [0]}],
+        obstacleRegions=[],
+        loadCases=[
+            {
+                "id": "LC-1",
+                "fixedRegions": ["mountA"],
+                "forces": [{"point": [3, 0, 0], "direction": [-1, 0, 0], "magnitude": 50, "unit": "N"}],
+            }
+        ],
+        material="PETG",
+        targets={"safetyFactor": 2.0, "outcomeCount": 2, "massReductionGoalPct": 30.0},
+    )
+
+    out = normalize_study(req, RunOptions(qualityProfile="balanced"))
+
+    assert out.mesh.faces.shape[0] == 24
+    assert out.mesh.extents[0] > 3.5
