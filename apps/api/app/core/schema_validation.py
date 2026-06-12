@@ -39,8 +39,3 @@ def validate_study_payload(payload: dict) -> None:
 def validate_run_options_payload(payload: dict) -> None:
     errors = sorted(_run_options_validator().iter_errors(payload), key=lambda e: e.path)
     _raise_first_schema_error(errors)
-
-
-def validate_solve_payload(payload: dict) -> None:
-    # Backward shim for any stale imports inside the codebase during transition.
-    validate_study_payload(payload)

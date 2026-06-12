@@ -16,6 +16,9 @@ coverage/
 # Runtime data
 data/studies/**
 !data/studies/.gitkeep
+data/*.db
+data/*.db-wal
+data/*.db-shm
 
 # Logs
 *.log

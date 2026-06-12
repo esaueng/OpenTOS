@@ -200,6 +200,16 @@ def save_outcome_v2(
         )
 
 
+def _parse_outcome_row(row: Any) -> dict[str, Any]:
+    return {
+        "outcome_id": row["outcome_id"],
+        "glb_path": row["glb_path"],
+        "metrics": json.loads(row["metrics_json"]),
+        "params": json.loads(row["params_json"]),
+        "warnings": json.loads(row["warnings_json"]),
+    }
+
+
 def get_outcomes_by_job_v2(job_id: str) -> list[dict[str, Any]]:
     with db_conn() as conn:
         rows = conn.execute(
@@ -212,18 +222,7 @@ def get_outcomes_by_job_v2(job_id: str) -> list[dict[str, Any]]:
             (job_id,),
         ).fetchall()
 
-    parsed: list[dict[str, Any]] = []
-    for row in rows:
-        parsed.append(
-            {
-                "outcome_id": row["outcome_id"],
-                "glb_path": row["glb_path"],
-                "metrics": json.loads(row["metrics_json"]),
-                "params": json.loads(row["params_json"]),
-                "warnings": json.loads(row["warnings_json"]),
-            }
-        )
-    return parsed
+    return [_parse_outcome_row(row) for row in rows]
 
 
 def get_outcomes_by_study_v2(study_id: str) -> list[dict[str, Any]]:
@@ -238,18 +237,7 @@ def get_outcomes_by_study_v2(study_id: str) -> list[dict[str, Any]]:
             (study_id,),
         ).fetchall()
 
-    parsed: list[dict[str, Any]] = []
-    for row in rows:
-        parsed.append(
-            {
-                "outcome_id": row["outcome_id"],
-                "glb_path": row["glb_path"],
-                "metrics": json.loads(row["metrics_json"]),
-                "params": json.loads(row["params_json"]),
-                "warnings": json.loads(row["warnings_json"]),
-            }
-        )
-    return parsed
+    return [_parse_outcome_row(row) for row in rows]
 
 
 def get_benchmark_v2(benchmark_id: str) -> dict[str, Any] | None:

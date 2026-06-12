@@ -19,7 +19,7 @@ def _to_mesh(payload: bytes, model_format: str) -> trimesh.Trimesh:
     loaded = trimesh.load(io.BytesIO(payload), file_type=model_format)
 
     if isinstance(loaded, trimesh.Scene):
-        flattened = loaded.dump(concatenate=True)
+        flattened = loaded.to_geometry()
         if isinstance(flattened, trimesh.Trimesh):
             return flattened
 
