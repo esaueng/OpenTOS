@@ -399,7 +399,7 @@ function pruneToVolumeTarget(
   return pruned;
 }
 
-function retainConnectedToAnchors(
+export function retainConnectedToAnchors(
   occupancy: Uint8Array,
   domainMask: Uint8Array,
   preserveMask: Uint8Array,

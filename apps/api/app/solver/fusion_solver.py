@@ -33,13 +33,13 @@ def _choose_pitch(mesh: trimesh.Trimesh) -> float:
     return float(np.clip(pitch, floor, max_extent / 36.0))
 
 
-def _world_to_index(point: np.ndarray, transform: np.ndarray, shape: tuple[int, int, int]) -> tuple[int, int, int]:
+def _world_to_indices(points: np.ndarray, transform: np.ndarray, shape: tuple[int, int, int]) -> np.ndarray:
+    """Map world-space points (N, 3) to clamped integer voxel indices (N, 3)."""
     inv = np.linalg.inv(transform)
-    hom = np.concatenate([point, np.array([1.0])])
-    idxf = inv @ hom
-    idx = np.round(idxf[:3]).astype(int)
-    idx = np.clip(idx, [0, 0, 0], np.array(shape) - 1)
-    return int(idx[0]), int(idx[1]), int(idx[2])
+    hom = np.concatenate([points, np.ones((points.shape[0], 1))], axis=1)
+    idxf = (inv @ hom.T).T[:, :3]
+    idx = np.rint(idxf).astype(int)
+    return np.clip(idx, [0, 0, 0], np.asarray(shape) - 1)
 
 
 def _voxel_centers(shape: tuple[int, int, int], transform: np.ndarray) -> np.ndarray:
@@ -65,9 +65,10 @@ def _voxel_mask_from_centers(
     dilation: int,
 ) -> np.ndarray:
     mask = np.zeros(shape, dtype=bool)
-    for center in centers:
-        x, y, z = _world_to_index(np.asarray(center, dtype=np.float64), transform, shape)
-        mask[x, y, z] = True
+    centers = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
+    if centers.shape[0] > 0:
+        idx = _world_to_indices(centers, transform, shape)
+        mask[idx[:, 0], idx[:, 1], idx[:, 2]] = True
     if dilation > 0:
         mask = ndi.binary_dilation(mask, iterations=dilation)
     return mask & solid_mask
@@ -81,6 +82,7 @@ def _force_seed_mask(
     pitch: float,
 ) -> np.ndarray:
     mask = np.zeros(shape, dtype=bool)
+    samples: list[np.ndarray] = []
     for force in forces:
         base = np.asarray(force.point_m, dtype=np.float64)
         direction = np.asarray(force.direction, dtype=np.float64)
@@ -93,9 +95,11 @@ def _force_seed_mask(
         radius = int(np.clip(np.sqrt(max(force.magnitude_n, 1.0)) / 40.0, 1, 2))
         trail_steps = radius + 1
         for step in range(trail_steps + 1):
-            sample = base - direction * pitch * step
-            x, y, z = _world_to_index(sample, transform, shape)
-            mask[x, y, z] = True
+            samples.append(base - direction * pitch * step)
+
+    if samples:
+        idx = _world_to_indices(np.asarray(samples), transform, shape)
+        mask[idx[:, 0], idx[:, 1], idx[:, 2]] = True
 
     mask = ndi.binary_dilation(mask, iterations=1)
     return mask & solid_mask
