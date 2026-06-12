@@ -6,14 +6,9 @@ import type { OutcomeV2 } from "@contracts/index";
 
 import { parseGlbFromBase64 } from "../lib/modelParsers";
 
-interface OutcomeTilesProps {
-  outcomes: OutcomeV2[];
-  selectedOutcomeId: string | null;
-  onSelectOutcome: (outcomeId: string) => void;
-}
-
 function Thumbnail({ base64 }: { base64: string }) {
   const [object, setObject] = useState<THREE.Object3D | null>(null);
+
   const previewObject = useMemo(() => {
     if (!object) {
       return null;
@@ -28,7 +23,7 @@ function Thumbnail({ base64 }: { base64: string }) {
       material.wireframe = false;
       material.transparent = false;
       if (node.name === "preserved") {
-        material.color = new THREE.Color("#35d07f");
+        material.color = new THREE.Color("#22c55e");
         material.opacity = 1;
         material.metalness = 0.08;
         material.roughness = 0.72;
@@ -67,8 +62,8 @@ function Thumbnail({ base64 }: { base64: string }) {
   }, [base64]);
 
   return (
-    <div className="thumbnail-canvas">
-      <Canvas camera={{ position: [1.2, 1.1, 1.2], fov: 35 }}>
+    <div className="outcome-thumb">
+      <Canvas camera={{ position: [1.2, 1.1, 1.2], fov: 35 }} dpr={1} gl={{ antialias: false, powerPreference: "low-power" }}>
         <ambientLight intensity={0.75} />
         <directionalLight position={[2, 3, 2]} intensity={1.0} />
         {previewObject && <primitive object={previewObject} />}
@@ -85,50 +80,35 @@ function formatMetric(value: number): string {
   if (Math.abs(value) >= 100) {
     return value.toFixed(1);
   }
-  return value.toFixed(3);
+  return value.toFixed(2);
 }
 
-export function OutcomeTiles({ outcomes, selectedOutcomeId, onSelectOutcome }: OutcomeTilesProps) {
-  const sorted = useMemo(
-    () =>
-      [...outcomes].sort((a, b) => {
-        const aScore = typeof a.variantParams?.rankScore === "number" ? Number(a.variantParams.rankScore) : Number.POSITIVE_INFINITY;
-        const bScore = typeof b.variantParams?.rankScore === "number" ? Number(b.variantParams.rankScore) : Number.POSITIVE_INFINITY;
-        if (aScore !== bScore) {
-          return aScore - bScore;
-        }
-        return a.id.localeCompare(b.id);
-      }),
-    [outcomes]
-  );
+interface OutcomeCardProps {
+  outcome: OutcomeV2;
+  rank: number;
+  selected: boolean;
+  onSelect: (outcomeId: string) => void;
+}
 
+export function OutcomeCard({ outcome, rank, selected, onSelect }: OutcomeCardProps) {
   return (
-    <div className="outcome-grid">
-      {sorted.map((outcome) => {
-        const selected = selectedOutcomeId === outcome.id;
-        return (
-          <button
-            key={outcome.id}
-            className={`outcome-tile ${selected ? "is-selected" : ""}`}
-            onClick={() => onSelectOutcome(outcome.id)}
-            type="button"
-          >
-            <div className="tile-header">
-              <strong>{outcome.id}</strong>
-              <span>{selected ? "Focused" : "Select"}</span>
-            </div>
-            <Thumbnail base64={outcome.optimizedModel.dataBase64} />
-            <div className="tile-metrics">
-              <span>Volume: {formatMetric(outcome.metrics.volume)}</span>
-              <span>Mass: {formatMetric(outcome.metrics.mass)}</span>
-              <span>Mass Δ: {formatMetric(outcome.metrics.massReductionPct)}%</span>
-              <span>Stress: {formatMetric(outcome.metrics.stressProxy)}</span>
-              <span>Disp: {formatMetric(outcome.metrics.displacementProxy)}</span>
-              <span>Safety: {formatMetric(outcome.metrics.safetyIndexProxy)}</span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
+    <button
+      type="button"
+      className={`outcome-card ${selected ? "selected" : ""}`}
+      onClick={() => onSelect(outcome.id)}
+      aria-pressed={selected}
+    >
+      <div className="outcome-card-head">
+        <strong className="mono">{outcome.id}</strong>
+        <span className="rank-pill mono">#{rank}</span>
+      </div>
+      <Thumbnail base64={outcome.optimizedModel.dataBase64} />
+      <dl className="outcome-metrics mono">
+        <div><dt>mass Δ</dt><dd>{formatMetric(outcome.metrics.massReductionPct)}%</dd></div>
+        <div><dt>mass</dt><dd>{formatMetric(outcome.metrics.mass)}</dd></div>
+        <div><dt>stress</dt><dd>{formatMetric(outcome.metrics.stressProxy)}</dd></div>
+        <div><dt>safety</dt><dd>{formatMetric(outcome.metrics.safetyIndexProxy)}</dd></div>
+      </dl>
+    </button>
   );
 }

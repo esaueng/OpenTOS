@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
 import { Environment, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -20,17 +20,42 @@ import {
 (THREE.BufferGeometry as unknown as { prototype: Record<string, unknown> }).prototype.computeBoundsTree = computeBoundsTree;
 (THREE.BufferGeometry as unknown as { prototype: Record<string, unknown> }).prototype.disposeBoundsTree = disposeBoundsTree;
 
+// Keep in sync with the --color-region-* tokens in theme/tokens.css.
 const LABEL_COLORS: Record<RegionLabel, THREE.ColorRepresentation> = {
-  preserved: "#35d07f",
-  fixed: "#5ad1ff",
+  preserved: "#22c55e",
+  fixed: "#4da3ff",
   obstacle: "#f59e0b",
-  design: "#8a95ad",
-  unassigned: "#526071"
+  design: "#66758c",
+  unassigned: "#4a5666"
 };
 const CONTROL_NONE = -1;
 const DISABLED_MOUSE_BUTTON = CONTROL_NONE as unknown as THREE.MOUSE;
 
-interface ViewerCanvasProps {
+/**
+ * drei's <Environment> fetches its HDR preset from a CDN at runtime. If that
+ * fetch fails (offline or restricted networks), the suspense error would
+ * otherwise unmount the whole app — degrade to plain lights instead.
+ */
+class OptionalEnvironment extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch() {
+    // Swallowed intentionally: the scene falls back to the analytic lights.
+  }
+
+  render() {
+    if (this.state.failed) {
+      return null;
+    }
+    return <Suspense fallback={null}>{this.props.children}</Suspense>;
+  }
+}
+
+interface GenerativeDesignViewerProps {
   geometry: THREE.BufferGeometry | null;
   faceLabels: RegionLabel[];
   paintLabel: RegionLabel | null;
@@ -45,6 +70,8 @@ interface ViewerCanvasProps {
   showOriginal: boolean;
   showOutcomeOverlay: boolean;
   wireframe: boolean;
+  /** Incremented externally to re-trigger the camera auto-fit. */
+  fitSignal: number;
 }
 
 interface EditablePartProps {
@@ -652,7 +679,7 @@ function OutcomeOverlay({ object, wireframe }: { object: THREE.Object3D; wirefra
   return <primitive object={cloned} />;
 }
 
-export function ViewerCanvas({
+export function GenerativeDesignViewer({
   geometry,
   faceLabels,
   paintLabel,
@@ -666,14 +693,15 @@ export function ViewerCanvas({
   outcomeObject,
   showOriginal,
   showOutcomeOverlay,
-  wireframe
-}: ViewerCanvasProps) {
+  wireframe,
+  fitSignal
+}: GenerativeDesignViewerProps) {
   const fitRootRef = useRef<THREE.Group>(null);
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const isEditing = Boolean(paintLabel) || placeForceMode;
   const renderOriginal = Boolean(geometry) && (showOriginal || isEditing);
   const renderOutcomeOverlay = Boolean(outcomeObject) && showOutcomeOverlay && !isEditing;
-  const fitKey = `${geometry?.uuid ?? "no-geometry"}:${renderOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${renderOutcomeOverlay}`;
+  const fitKey = `${geometry?.uuid ?? "no-geometry"}:${renderOriginal}:${outcomeObject?.uuid ?? "no-outcome"}:${renderOutcomeOverlay}:${fitSignal}`;
   const forceScale = useMemo(() => {
     const box = new THREE.Box3();
     if (geometry) {
@@ -695,67 +723,69 @@ export function ViewerCanvas({
   }, [geometry, outcomeObject]);
 
   return (
-    <div className="viewer-shell">
-      <Canvas camera={{ fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }} shadows onPointerMissed={() => onSelectForce(null)}>
-        <color attach="background" args={["#081223"]} />
-        <ambientLight intensity={0.5} />
-        <directionalLight position={[2, 3, 2]} intensity={1.1} castShadow />
-        <group ref={fitRootRef} onClick={() => onSelectForce(null)}>
-          {geometry && renderOriginal && (
-            <EditablePart
-              geometry={geometry}
-              faceLabels={faceLabels}
-              paintLabel={paintLabel}
-              brushRadius={brushRadius}
-              onPaintFaces={onPaintFaces}
-              placeForceMode={placeForceMode}
-              onPlaceForce={onPlaceForce}
-            />
-          )}
-          {outcomeObject && renderOutcomeOverlay && (
-            <OutcomeOverlay object={outcomeObject} wireframe={wireframe} />
-          )}
-          {forces.map((force) => (
-            <ForceArrow
-              key={force.id}
-              force={force}
-              scale={forceScale}
-              selected={force.id === selectedForceId}
-              onSelect={() => onSelectForce(force.id)}
-            />
-          ))}
-        </group>
-        <CameraAutoFit fitRootRef={fitRootRef} controlsRef={controlsRef} fitKey={fitKey} />
+    <Canvas camera={{ fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }} shadows onPointerMissed={() => onSelectForce(null)}>
+      <color attach="background" args={["#070b10"]} />
+      <ambientLight intensity={0.55} />
+      <hemisphereLight intensity={0.55} color="#cfd8e3" groundColor="#0b0f14" />
+      <directionalLight position={[2, 3, 2]} intensity={1.15} castShadow />
+      <directionalLight position={[-2.5, 1.5, -2]} intensity={0.45} />
+      <group ref={fitRootRef} onClick={() => onSelectForce(null)}>
+        {geometry && renderOriginal && (
+          <EditablePart
+            geometry={geometry}
+            faceLabels={faceLabels}
+            paintLabel={paintLabel}
+            brushRadius={brushRadius}
+            onPaintFaces={onPaintFaces}
+            placeForceMode={placeForceMode}
+            onPlaceForce={onPlaceForce}
+          />
+        )}
+        {outcomeObject && renderOutcomeOverlay && (
+          <OutcomeOverlay object={outcomeObject} wireframe={wireframe} />
+        )}
+        {forces.map((force) => (
+          <ForceArrow
+            key={force.id}
+            force={force}
+            scale={forceScale}
+            selected={force.id === selectedForceId}
+            onSelect={() => onSelectForce(force.id)}
+          />
+        ))}
+      </group>
+      <CameraAutoFit fitRootRef={fitRootRef} controlsRef={controlsRef} fitKey={fitKey} />
+      <OptionalEnvironment>
         <Environment preset="city" />
-        <OrbitControls
-          ref={controlsRef}
-          makeDefault
-          enableDamping
-          minDistance={1e-5}
-          maxDistance={1e12}
-          zoomSpeed={1}
-          panSpeed={0.9}
-          mouseButtons={
-            placeForceMode || paintLabel === "preserved"
+      </OptionalEnvironment>
+      <OrbitControls
+        ref={controlsRef}
+        makeDefault
+        enableDamping
+        minDistance={1e-5}
+        maxDistance={1e12}
+        zoomSpeed={1}
+        panSpeed={0.9}
+        mouseButtons={
+          placeForceMode || paintLabel === "preserved"
+            ? {
+                LEFT: THREE.MOUSE.ROTATE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: paintLabel === "preserved" ? DISABLED_MOUSE_BUTTON : THREE.MOUSE.PAN
+              }
+            : isEditing
               ? {
+                  LEFT: DISABLED_MOUSE_BUTTON,
+                  MIDDLE: THREE.MOUSE.DOLLY,
+                  RIGHT: THREE.MOUSE.PAN
+                }
+              : {
                   LEFT: THREE.MOUSE.ROTATE,
                   MIDDLE: THREE.MOUSE.DOLLY,
-                  RIGHT: paintLabel === "preserved" ? DISABLED_MOUSE_BUTTON : THREE.MOUSE.PAN
+                  RIGHT: THREE.MOUSE.PAN
                 }
-              : isEditing
-                ? {
-                    LEFT: DISABLED_MOUSE_BUTTON,
-                    MIDDLE: THREE.MOUSE.DOLLY,
-                    RIGHT: THREE.MOUSE.PAN
-                  }
-                : {
-                    LEFT: THREE.MOUSE.ROTATE,
-                    MIDDLE: THREE.MOUSE.DOLLY,
-                    RIGHT: THREE.MOUSE.PAN
-                  }
-          }
-        />
-      </Canvas>
-    </div>
+        }
+      />
+    </Canvas>
   );
 }

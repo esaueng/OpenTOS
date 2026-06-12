@@ -2,10 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { OutcomeV2 } from "@contracts/index";
 import * as THREE from "three";
 
-import { OutcomeTiles } from "./components/OutcomeTiles";
-import { ViewerCanvas } from "./components/ViewerCanvas";
+import { AppShell } from "./components/AppShell";
+import { ContextPanel } from "./components/ContextPanel";
+import { GenerativeDesignViewer } from "./components/GenerativeDesignViewer";
+import { OutcomePanel } from "./components/OutcomePanel";
+import { SelectionLegend } from "./components/SelectionLegend";
+import { StatusBar, type WorkspaceStatusTone } from "./components/StatusBar";
+import { StepBar } from "./components/StepBar";
+import { TopBar } from "./components/TopBar";
+import { ViewerShell } from "./components/ViewerShell";
+import { ViewerToolbar } from "./components/ViewerToolbar";
+import { ConstraintsPanel } from "./components/panels/ConstraintsPanel";
+import { GeneratePanel } from "./components/panels/GeneratePanel";
+import { LoadsPanel } from "./components/panels/LoadsPanel";
+import { ModelPanel } from "./components/panels/ModelPanel";
+import { PreservePanel } from "./components/panels/PreservePanel";
+import { ResultsPanel } from "./components/panels/ResultsPanel";
+import { StudyPanel } from "./components/panels/StudyPanel";
 import { parseGlbFromBase64, parseModelFile } from "./lib/modelParsers";
-import { MATERIAL_OPTIONS } from "./materials";
 import {
   applyFaceLabels,
   buildConstraintGroups,
@@ -16,6 +30,16 @@ import {
   initializeFaceLabels,
   nextSequentialId
 } from "./lib/studyState";
+import {
+  canNavigateToStep,
+  canRunStudy,
+  missingRunItems,
+  nextStep,
+  previousStep,
+  runChecklist,
+  type StepId,
+  type WorkflowSnapshot
+} from "./lib/workflow";
 import type {
   BrowserQualityProfile,
   ForceState,
@@ -25,7 +49,6 @@ import type {
   StudySettings,
   UploadedModel
 } from "./types";
-import "./styles.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 const apiUrl = (path: string) => (API_BASE ? `${API_BASE}${path}` : path);
@@ -52,18 +75,6 @@ type BrowserWorkerMessage =
       error: string;
     };
 
-const STAGES: JobStatus["stage"][] = [
-  "queued",
-  "parse",
-  "constraint-map",
-  "voxelize",
-  "fem-solve",
-  "topology-opt",
-  "reconstruct",
-  "rank-export",
-  "complete"
-];
-
 function defaultLoadCase(id = "LC-1"): LoadCaseState {
   return {
     id,
@@ -71,25 +82,11 @@ function defaultLoadCase(id = "LC-1"): LoadCaseState {
   };
 }
 
-function stageLabel(stage: JobStatus["stage"]): string {
-  switch (stage) {
-    case "constraint-map":
-      return "Constraint Map";
-    case "fem-solve":
-      return "FE Proxy Solve";
-    case "topology-opt":
-      return "Topology Optimization";
-    case "rank-export":
-      return "Rank & Export";
-    default:
-      return stage.replace("-", " ");
-  }
-}
-
 export default function App() {
+  const [activeStep, setActiveStep] = useState<StepId>("model");
   const [model, setModel] = useState<UploadedModel | null>(null);
   const [faceLabels, setFaceLabels] = useState<RegionLabel[]>([]);
-  const [paintLabel, setPaintLabel] = useState<RegionLabel | null>("preserved");
+  const [paintLabel, setPaintLabel] = useState<RegionLabel | null>(null);
   const [brushRadius, setBrushRadius] = useState(0.06);
   const [placeForceMode, setPlaceForceMode] = useState(false);
   const [loadCases, setLoadCases] = useState<LoadCaseState[]>([defaultLoadCase()]);
@@ -114,39 +111,24 @@ export default function App() {
   const [outcomes, setOutcomes] = useState<OutcomeV2[]>([]);
   const [selectedOutcomeId, setSelectedOutcomeId] = useState<string | null>(null);
   const [selectedOutcomeObject, setSelectedOutcomeObject] = useState<THREE.Object3D | null>(null);
-  const [showOriginal, setShowOriginal] = useState(false);
+  // The part must stay visible on every step after load; editing modes force
+  // it on regardless, this only affects passive steps (Study/Generate/Results).
+  const [showOriginal, setShowOriginal] = useState(true);
   const [showOutcomeOverlay, setShowOutcomeOverlay] = useState(true);
   const [wireframe, setWireframe] = useState(false);
+  const [fitSignal, setFitSignal] = useState(0);
   const [isSubmittingStudy, setIsSubmittingStudy] = useState(false);
   const [workerWarnings, setWorkerWarnings] = useState<string[]>([]);
   const workerRef = useRef<Worker | null>(null);
 
-  const selectedForce = useMemo(
-    () => forces.find((force) => force.id === selectedForceId) ?? null,
-    [forces, selectedForceId]
-  );
-  const selectedLoadCase = useMemo(
-    () => loadCases.find((loadCase) => loadCase.id === selectedLoadCaseId) ?? null,
-    [loadCases, selectedLoadCaseId]
-  );
   const isBrowserSolver = SOLVER_MODE === "browser";
   const constraintGroups = useMemo(
-    () => (model ? buildConstraintGroups(model.solveGeometry, faceLabels) : { fixedRegions: [], preservedRegions: [], obstacleRegions: [] }),
+    () =>
+      model
+        ? buildConstraintGroups(model.solveGeometry, faceLabels)
+        : { fixedRegions: [], preservedRegions: [], obstacleRegions: [] },
     [faceLabels, model]
   );
-  const forcesByLoadCase = useMemo(() => {
-    const map = new Map<string, ForceState[]>();
-    for (const loadCase of loadCases) {
-      map.set(loadCase.id, []);
-    }
-    for (const force of forces) {
-      if (!map.has(force.loadCaseId)) {
-        map.set(force.loadCaseId, []);
-      }
-      map.get(force.loadCaseId)?.push(force);
-    }
-    return map;
-  }, [forces, loadCases]);
 
   useEffect(() => {
     return () => {
@@ -184,6 +166,7 @@ export default function App() {
           setShowOriginal(true);
           setShowOutcomeOverlay(true);
           setJobId(null);
+          setActiveStep("results");
         }
 
         if (payload.status === "failed" || payload.status === "canceled") {
@@ -248,6 +231,65 @@ export default function App() {
   const fixedCount = useMemo(() => getFixedFaceIndices(faceLabels).length, [faceLabels]);
   const obstacleCount = useMemo(() => getObstacleFaceIndices(faceLabels).length, [faceLabels]);
 
+  const running = isSubmittingStudy || Boolean(jobId);
+  const snapshot: WorkflowSnapshot = useMemo(
+    () => ({
+      hasModel: Boolean(model),
+      preservedCount,
+      fixedCount,
+      obstacleCount,
+      forces,
+      loadCases,
+      outcomeCount: outcomes.length,
+      running
+    }),
+    [model, preservedCount, fixedCount, obstacleCount, forces, loadCases, outcomes.length, running]
+  );
+  const checklist = useMemo(() => runChecklist(snapshot), [snapshot]);
+  const missingItems = useMemo(() => missingRunItems(snapshot), [snapshot]);
+  const canRun = canRunStudy(snapshot);
+
+  const handleStepSelect = (step: StepId) => {
+    setActiveStep(step);
+    setPlaceForceMode(false);
+    if (step === "preserve") {
+      setPaintLabel("preserved");
+    } else if (step === "constraints") {
+      setPaintLabel("fixed");
+    } else {
+      setPaintLabel(null);
+    }
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+      if (event.key === "n" || event.key === "N") {
+        const next = nextStep(activeStep);
+        if (next && canNavigateToStep(next, snapshot)) {
+          handleStepSelect(next);
+        }
+      } else if (event.key === "b" || event.key === "B") {
+        const previous = previousStep(activeStep);
+        if (previous) {
+          handleStepSelect(previous);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [activeStep, snapshot]);
+
   const onUploadFile = async (file: File) => {
     setError(null);
     setWorkerWarnings([]);
@@ -266,6 +308,7 @@ export default function App() {
     setStudyId(null);
     setJobId(null);
     setJobStatus(null);
+    handleStepSelect("preserve");
   };
 
   const loadSamplePart = async () => {
@@ -384,30 +427,20 @@ export default function App() {
       return;
     }
 
-    if (preservedCount + fixedCount === 0) {
-      setError("Mark at least one preserved or fixed region before solve.");
-      return;
-    }
-
     if (fixedCount === 0) {
       setError("Mark at least one fixed region before solve.");
       return;
     }
 
-    const activeLoadCases = loadCases.filter((loadCase) => forces.some((force) => force.loadCaseId === loadCase.id));
-    if (activeLoadCases.length === 0) {
+    const activeLoadCasesList = loadCases.filter((loadCase) => forces.some((force) => force.loadCaseId === loadCase.id));
+    if (activeLoadCasesList.length === 0) {
       setError("Add at least one force to a load case before solve.");
       return;
     }
 
-    const invalidLoadCase = activeLoadCases.find((loadCase) => loadCase.fixedRegionIds.length === 0);
+    const invalidLoadCase = activeLoadCasesList.find((loadCase) => loadCase.fixedRegionIds.length === 0);
     if (invalidLoadCase) {
       setError(`${invalidLoadCase.id} must reference at least one fixed region.`);
-      return;
-    }
-
-    if (forces.length === 0) {
-      setError("Add at least one force before solve.");
       return;
     }
 
@@ -419,19 +452,20 @@ export default function App() {
     setIsSubmittingStudy(true);
     setPaintLabel(null);
     setPlaceForceMode(false);
+    setActiveStep("generate");
 
     try {
-        const payload = buildSolvePayload({
-          model,
-          units: settings.units,
-          faceLabels,
-          forces,
-          loadCases,
-          material: settings.material,
-          targetSafetyFactor: settings.targetSafetyFactor,
-          outcomeCount: settings.outcomeCount,
-          massReductionGoalPct: settings.massReductionGoalPct
-        });
+      const payload = buildSolvePayload({
+        model,
+        units: settings.units,
+        faceLabels,
+        forces,
+        loadCases,
+        material: settings.material,
+        targetSafetyFactor: settings.targetSafetyFactor,
+        outcomeCount: settings.outcomeCount,
+        massReductionGoalPct: settings.massReductionGoalPct
+      });
 
       if (isBrowserSolver) {
         workerRef.current?.terminate();
@@ -544,6 +578,7 @@ export default function App() {
             : current
         );
         setJobId(null);
+        setActiveStep("results");
         return;
       }
 
@@ -608,452 +643,156 @@ export default function App() {
     }
   };
 
-  return (
-    <div className="app-shell">
-      <aside className="control-panel">
-        <header>
-          <h1>OpenTOS Generative Design</h1>
-          <p>Autodesk-inspired structural outcome studies for load-path-driven organic parts.</p>
-        </header>
+  const selectedOutcome = outcomes.find((outcome) => outcome.id === selectedOutcomeId) ?? null;
+  const statusTone: WorkspaceStatusTone = error ? "warning" : running ? "running" : "ready";
+  const statusLabel = error ? "Needs attention" : running ? "Generating" : outcomes.length > 0 ? "Results ready" : "Ready";
 
-        <section className="panel-card">
-          <h2>1. Upload</h2>
-          <button type="button" onClick={() => void loadSamplePart().catch((err: unknown) => setError(err instanceof Error ? err.message : "Sample load failed"))}>
-            Load Sample Connecting Rod
-          </button>
-          <input
-            type="file"
-            accept=".stl,.obj,.glb"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) {
-                return;
-              }
+  const activePanel = (() => {
+    switch (activeStep) {
+      case "model":
+        return (
+          <ModelPanel
+            model={model}
+            faceCount={faceLabels.length}
+            units={settings.units}
+            onUnitsChange={(units) => setSettings((curr) => ({ ...curr, units }))}
+            onUploadFile={(file) => {
               void onUploadFile(file).catch((err: unknown) => {
                 setError(err instanceof Error ? err.message : "Could not parse uploaded model");
               });
             }}
-          />
-          <label>
-            Units
-            <select
-              value={settings.units}
-              onChange={(event) => setSettings((curr) => ({ ...curr, units: event.target.value as StudySettings["units"] }))}
-            >
-              <option value="mm">mm</option>
-              <option value="in">in</option>
-              <option value="m">m</option>
-            </select>
-          </label>
-          {model && <p className="small-note">Loaded: {model.fileName}</p>}
-        </section>
-
-        <section className="panel-card">
-          <h2>2. Preserve Geometry</h2>
-          <div className="inline-buttons">
-            <button
-              type="button"
-              className={paintLabel === "preserved" ? "is-active" : ""}
-              onClick={() => {
-                setPaintLabel("preserved");
-                setPlaceForceMode(false);
-              }}
-            >
-              Select Preserved Surface
-            </button>
-            <button
-              type="button"
-              className={paintLabel === "fixed" ? "is-active" : ""}
-              onClick={() => {
-                setPaintLabel("fixed");
-                setPlaceForceMode(false);
-              }}
-            >
-              Select Fixed Surface
-            </button>
-            <button
-              type="button"
-              className={paintLabel === "design" ? "is-active" : ""}
-              onClick={() => {
-                setPaintLabel("design");
-                setPlaceForceMode(false);
-              }}
-            >
-              Paint Design
-            </button>
-            <button
-              type="button"
-              className={paintLabel === "obstacle" ? "is-active" : ""}
-              onClick={() => {
-                setPaintLabel("obstacle");
-                setPlaceForceMode(false);
-              }}
-            >
-              Paint Obstacle
-            </button>
-          </div>
-          <label>
-            Brush Radius
-            <input
-              type="range"
-              min={0.02}
-              max={0.2}
-              step={0.01}
-              value={brushRadius}
-              onChange={(event) => setBrushRadius(Number(event.target.value))}
-            />
-          </label>
-          <p className="small-note">
-            Preserved and fixed modes: left-click to keep a contiguous interface surface, right-click to clear it back to design.
-          </p>
-          <p className="small-note">Preserved faces: {preservedCount}</p>
-          <p className="small-note">Fixed faces: {fixedCount}</p>
-          <p className="small-note">Obstacle faces: {obstacleCount}</p>
-        </section>
-
-        <section className="panel-card">
-          <h2>3. Loads</h2>
-          <div className="panel-subsection">
-            <div className="panel-subsection-header">
-              <strong>Load Cases</strong>
-              <button type="button" onClick={addLoadCase}>
-                Add Load Case
-              </button>
-            </div>
-            <div className="force-list">
-              {loadCases.map((loadCase) => (
-                <button
-                  key={loadCase.id}
-                  type="button"
-                  className={`force-chip ${selectedLoadCaseId === loadCase.id ? "is-active" : ""}`}
-                  onClick={() => setSelectedLoadCaseId(loadCase.id)}
-                >
-                  {loadCase.id} ({forcesByLoadCase.get(loadCase.id)?.length ?? 0})
-                </button>
-              ))}
-            </div>
-            {selectedLoadCase && (
-              <div className="force-editor">
-                <p className="small-note">Fixed interfaces for {selectedLoadCase.id}</p>
-                <div className="force-list">
-                  {constraintGroups.fixedRegions.length > 0 ? (
-                    constraintGroups.fixedRegions.map((region) => {
-                      const active = selectedLoadCase.fixedRegionIds.includes(region.id);
-                      return (
-                        <button
-                          key={region.id}
-                          type="button"
-                          className={`force-chip ${active ? "is-active" : ""}`}
-                          onClick={() =>
-                            updateLoadCase(selectedLoadCase.id, {
-                              fixedRegionIds: active
-                                ? selectedLoadCase.fixedRegionIds.filter((regionId) => regionId !== region.id)
-                                : [...selectedLoadCase.fixedRegionIds, region.id]
-                            })
-                          }
-                        >
-                          {region.id} ({region.faceIndices.length})
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <p className="small-note">Mark one or more fixed surfaces to define boundary conditions.</p>
-                  )}
-                </div>
-                <div className="inline-buttons">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateLoadCase(selectedLoadCase.id, {
-                        fixedRegionIds: constraintGroups.fixedRegions.map((region) => region.id)
-                      })
-                    }
-                  >
-                    Use All Fixed
-                  </button>
-                  <button type="button" disabled={loadCases.length <= 1} onClick={() => removeLoadCase(selectedLoadCase.id)}>
-                    Remove Load Case
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            className={placeForceMode ? "is-active" : ""}
-            onClick={() => {
-              setPlaceForceMode((current) => !current);
-              setPaintLabel(null);
+            onLoadSample={() => {
+              void loadSamplePart().catch((err: unknown) =>
+                setError(err instanceof Error ? err.message : "Sample load failed")
+              );
             }}
-          >
-            {placeForceMode ? "Click Surface to Place..." : "Add Force"}
-          </button>
-          <div className="inline-buttons" style={{ marginTop: "0.45rem" }}>
-            <button type="button" className={showAllForces ? "is-active" : ""} onClick={() => setShowAllForces(true)}>
-              Show All Forces
-            </button>
-            <button type="button" className={!showAllForces ? "is-active" : ""} onClick={() => setShowAllForces(false)}>
-              Show Selected Case
-            </button>
-          </div>
+          />
+        );
+      case "preserve":
+        return (
+          <PreservePanel
+            selecting={paintLabel === "preserved"}
+            onToggleSelecting={() => {
+              setPlaceForceMode(false);
+              setPaintLabel((current) => (current === "preserved" ? null : "preserved"));
+            }}
+            preservedCount={preservedCount}
+            preservedRegions={constraintGroups.preservedRegions}
+          />
+        );
+      case "constraints":
+        return (
+          <ConstraintsPanel
+            tool={paintLabel === "fixed" || paintLabel === "obstacle" || paintLabel === "design" ? paintLabel : null}
+            onToolChange={(tool) => {
+              setPlaceForceMode(false);
+              setPaintLabel(tool);
+            }}
+            brushRadius={brushRadius}
+            onBrushRadiusChange={setBrushRadius}
+            fixedCount={fixedCount}
+            obstacleCount={obstacleCount}
+            fixedRegions={constraintGroups.fixedRegions}
+          />
+        );
+      case "loads":
+        return (
+          <LoadsPanel
+            loadCases={loadCases}
+            selectedLoadCaseId={selectedLoadCaseId}
+            forces={forces}
+            selectedForceId={selectedForceId}
+            fixedRegions={constraintGroups.fixedRegions}
+            placeForceMode={placeForceMode}
+            showAllForces={showAllForces}
+            onSelectLoadCase={setSelectedLoadCaseId}
+            onAddLoadCase={addLoadCase}
+            onRemoveLoadCase={removeLoadCase}
+            onUpdateLoadCase={updateLoadCase}
+            onTogglePlaceForce={() => {
+              setPaintLabel(null);
+              setPlaceForceMode((current) => !current);
+            }}
+            onShowAllForcesChange={setShowAllForces}
+            onSelectForce={setSelectedForceId}
+            onUpdateForce={updateForce}
+            onRemoveForce={removeForce}
+          />
+        );
+      case "study":
+        return (
+          <StudyPanel
+            settings={settings}
+            onSettingsChange={(patch) => setSettings((curr) => ({ ...curr, ...patch }))}
+            qualityProfile={qualityProfile}
+            onQualityProfileChange={setQualityProfile}
+            isBrowserSolver={isBrowserSolver}
+          />
+        );
+      case "generate":
+        return (
+          <GeneratePanel
+            checklist={checklist}
+            canRun={canRun}
+            running={running}
+            jobStatus={jobStatus}
+            warnings={workerWarnings}
+            onRun={() => void runStudy()}
+          />
+        );
+      case "results":
+        return <ResultsPanel outcomes={outcomes} selectedOutcome={selectedOutcome} />;
+    }
+  })();
 
-          <div className="force-list">
-            {(showAllForces ? forces : forces.filter((force) => force.loadCaseId === selectedLoadCaseId)).map((force) => (
-              <button
-                key={force.id}
-                type="button"
-                className={`force-chip ${selectedForceId === force.id ? "is-active" : ""}`}
-                onClick={() => {
-                  setSelectedForceId(force.id);
-                  setSelectedLoadCaseId(force.loadCaseId);
-                }}
-              >
-                {force.label} · {force.loadCaseId}
-              </button>
-            ))}
-          </div>
-
-          {selectedForce && (
-            <div className="force-editor">
-              <label>
-                Load Case
-                <select
-                  value={selectedForce.loadCaseId}
-                  onChange={(event) => updateForce(selectedForce.id, { loadCaseId: event.target.value })}
-                >
-                  {loadCases.map((loadCase) => (
-                    <option key={loadCase.id} value={loadCase.id}>
-                      {loadCase.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Magnitude
-                <input
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  value={selectedForce.magnitude}
-                  onChange={(event) => updateForce(selectedForce.id, { magnitude: Number(event.target.value) })}
-                />
-              </label>
-              <label>
-                Unit
-                <select
-                  value={selectedForce.unit}
-                  onChange={(event) => updateForce(selectedForce.id, { unit: event.target.value as ForceState["unit"] })}
-                >
-                  <option value="lb">lb</option>
-                  <option value="N">N</option>
-                </select>
-              </label>
-              <label>
-                Direction X
-                <input
-                  type="number"
-                  step={0.1}
-                  value={selectedForce.direction[0]}
-                  onChange={(event) =>
-                    updateForce(selectedForce.id, {
-                      direction: [
-                        Number(event.target.value),
-                        selectedForce.direction[1],
-                        selectedForce.direction[2]
-                      ] as [number, number, number]
-                    })
-                  }
-                />
-              </label>
-              <label>
-                Direction Y
-                <input
-                  type="number"
-                  step={0.1}
-                  value={selectedForce.direction[1]}
-                  onChange={(event) =>
-                    updateForce(selectedForce.id, {
-                      direction: [
-                        selectedForce.direction[0],
-                        Number(event.target.value),
-                        selectedForce.direction[2]
-                      ] as [number, number, number]
-                    })
-                  }
-                />
-              </label>
-              <label>
-                Direction Z
-                <input
-                  type="number"
-                  step={0.1}
-                  value={selectedForce.direction[2]}
-                  onChange={(event) =>
-                    updateForce(selectedForce.id, {
-                      direction: [
-                        selectedForce.direction[0],
-                        selectedForce.direction[1],
-                        Number(event.target.value)
-                      ] as [number, number, number]
-                    })
-                  }
-                />
-              </label>
-              <div className="inline-buttons">
-                <button type="button" onClick={() => updateForce(selectedForce.id, { direction: selectedForce.normal })}>
-                  Align to Face Normal
-                </button>
-                <button type="button" onClick={() => removeForce(selectedForce.id)}>
-                  Remove
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="panel-card">
-          <h2>4. Study Setup</h2>
-          <label>
-            Material
-            <select
-              value={settings.material}
-              onChange={(event) =>
-                setSettings((curr) => ({
-                  ...curr,
-                  material: event.target.value as StudySettings["material"]
-                }))
-              }
-            >
-              {MATERIAL_OPTIONS.map((materialName) => (
-                <option key={materialName} value={materialName}>
-                  {materialName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Safety Factor
-            <input
-              type="number"
-              min={1}
-              max={5}
-              step={0.1}
-              value={settings.targetSafetyFactor}
-              onChange={(event) => setSettings((curr) => ({ ...curr, targetSafetyFactor: Number(event.target.value) }))}
+  return (
+    <AppShell
+      topBar={
+        <TopBar
+          modelName={model?.fileName ?? null}
+          units={settings.units}
+          running={running}
+          canRun={canRun}
+          missingRunItems={missingItems}
+          onRun={() => void runStudy()}
+        />
+      }
+      stepBar={
+        <StepBar
+          activeStep={activeStep}
+          snapshot={snapshot}
+          solverMode={SOLVER_MODE}
+          units={settings.units}
+          onSelect={handleStepSelect}
+        />
+      }
+      viewer={
+        <ViewerShell
+          hasModel={Boolean(model)}
+          paintLabel={paintLabel}
+          placeForceMode={placeForceMode}
+          toolbar={
+            <ViewerToolbar
+              showOriginal={showOriginal}
+              showOutcomeOverlay={showOutcomeOverlay}
+              wireframe={wireframe}
+              hasOutcome={Boolean(selectedOutcomeObject)}
+              onToggleOriginal={() => setShowOriginal((value) => !value)}
+              onToggleOutcomeOverlay={() => setShowOutcomeOverlay((value) => !value)}
+              onToggleWireframe={() => setWireframe((value) => !value)}
+              onFit={() => setFitSignal((value) => value + 1)}
             />
-          </label>
-          <label>
-            Mass Reduction Goal (%)
-            <input
-              type="number"
-              min={5}
-              max={80}
-              step={1}
-              value={settings.massReductionGoalPct}
-              onChange={(event) => setSettings((curr) => ({ ...curr, massReductionGoalPct: Number(event.target.value) }))}
+          }
+          legend={
+            <SelectionLegend
+              preservedCount={preservedCount}
+              fixedCount={fixedCount}
+              obstacleCount={obstacleCount}
+              forceCount={forces.length}
             />
-          </label>
-          <label>
-            Outcomes
-            <input
-              type="number"
-              min={2}
-              max={12}
-              step={1}
-              value={settings.outcomeCount}
-              onChange={(event) => setSettings((curr) => ({ ...curr, outcomeCount: Number(event.target.value) }))}
-            />
-          </label>
-          {isBrowserSolver && (
-            <label>
-              Browser Quality
-              <select
-                value={qualityProfile}
-                onChange={(event) => setQualityProfile(event.target.value as BrowserQualityProfile)}
-              >
-                <option value="high-fidelity">High Fidelity</option>
-                <option value="balanced">Balanced</option>
-                <option value="fast-preview">Fast Preview</option>
-              </select>
-            </label>
-          )}
-          <button
-            type="button"
-            className="run-button"
-            disabled={isSubmittingStudy || Boolean(jobId)}
-            onClick={() => void runStudy()}
-          >
-            {isSubmittingStudy || jobId ? "Starting Study..." : "Run Generative Study"}
-          </button>
-          <p className="small-note run-hint">
-            Required: model upload, at least 1 fixed face, at least 1 preserved-or-fixed face, and at least 1 force assigned to a load case.
-          </p>
-          <p className="small-note run-hint">
-            Solver mode: {isBrowserSolver ? "Browser (local compute)" : "API (remote compute)"}
-          </p>
-          {jobStatus?.qualityProfile && (
-            <p className="small-note run-hint">Active quality: {jobStatus.qualityProfile}</p>
-          )}
-          {jobStatus?.etaSeconds != null && jobStatus.status === "running" && (
-            <p className="small-note run-hint">ETA: ~{Math.max(0, jobStatus.etaSeconds)}s</p>
-          )}
-          {workerWarnings.length > 0 && (
-            <div className="panel-warning">
-              {workerWarnings.map((warning, idx) => (
-                <p key={`${idx}-${warning}`}>{warning}</p>
-              ))}
-            </div>
-          )}
-          {error && <p className="panel-error">{error}</p>}
-        </section>
-      </aside>
-
-      <main className="workspace">
-        <section className="viewer-panel">
-          <div className="viewer-toolbar">
-            <div className="inline-buttons">
-              <button type="button" className={showOriginal ? "is-active" : ""} onClick={() => setShowOriginal((v) => !v)}>
-                Original
-              </button>
-              <button
-                type="button"
-                className={showOutcomeOverlay ? "is-active" : ""}
-                onClick={() => setShowOutcomeOverlay((v) => !v)}
-              >
-                Generated
-              </button>
-              <button type="button" className={wireframe ? "is-active" : ""} onClick={() => setWireframe((v) => !v)}>
-                Wireframe
-              </button>
-            </div>
-
-            {jobStatus && (
-              <div className="progress-wrap">
-                <div className="progress-meta">
-                  <span>{stageLabel(jobStatus.stage)}</span>
-                  <strong>{Math.round(jobStatus.progress * 100)}%</strong>
-                </div>
-                <progress max={1} value={jobStatus.progress} />
-                <div className="stage-track">
-                  {STAGES.map((stage) => (
-                    <span
-                      key={stage}
-                      className={
-                        STAGES.indexOf(stage) <=
-                        Math.max(0, STAGES.indexOf(jobStatus.stage === "failed" ? "complete" : jobStatus.stage))
-                          ? "is-hit"
-                          : ""
-                      }
-                    >
-                      {stageLabel(stage)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <ViewerCanvas
+          }
+        >
+          <GenerativeDesignViewer
             geometry={model?.geometry ?? null}
             faceLabels={faceLabels}
             paintLabel={paintLabel}
@@ -1070,27 +809,51 @@ export default function App() {
             showOriginal={showOriginal}
             showOutcomeOverlay={showOutcomeOverlay}
             wireframe={wireframe}
+            fitSignal={fitSignal}
           />
-        </section>
-
-        <section className="outcomes-panel">
-          <div className="outcomes-header">
-            <h2>Outcome View</h2>
-            <p>{outcomes.length} outcomes generated</p>
-          </div>
-          {outcomes.length > 0 ? (
-            <OutcomeTiles
-              outcomes={outcomes}
-              selectedOutcomeId={selectedOutcomeId}
-              onSelectOutcome={setSelectedOutcomeId}
-            />
-          ) : (
-            <p className="empty-state">Run a study to see Autodesk-style structural variants side-by-side.</p>
+          {error && (
+            <div className="viewer-error" role="alert">
+              <span>{error}</span>
+              <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">
+                ×
+              </button>
+            </div>
           )}
-        </section>
-
-        {error && <div className="error-banner">{error}</div>}
-      </main>
-    </div>
+        </ViewerShell>
+      }
+      contextPanel={
+        <ContextPanel activeStep={activeStep} snapshot={snapshot} onStepSelect={handleStepSelect}>
+          {activePanel}
+        </ContextPanel>
+      }
+      outcomePanel={
+        outcomes.length > 0 || running ? (
+          <OutcomePanel
+            outcomes={outcomes}
+            selectedOutcomeId={selectedOutcomeId}
+            jobStatus={running ? jobStatus : null}
+            onSelectOutcome={(outcomeId) => {
+              setSelectedOutcomeId(outcomeId);
+              if (activeStep !== "results" && canNavigateToStep("results", snapshot)) {
+                handleStepSelect("results");
+              }
+            }}
+          />
+        ) : null
+      }
+      statusBar={
+        <StatusBar
+          statusLabel={statusLabel}
+          tone={statusTone}
+          solverMode={SOLVER_MODE}
+          modelName={model?.fileName ?? null}
+          faceCount={faceLabels.length}
+          preservedCount={preservedCount}
+          fixedCount={fixedCount}
+          outcomeCount={outcomes.length}
+          studyId={studyId}
+        />
+      }
+    />
   );
 }

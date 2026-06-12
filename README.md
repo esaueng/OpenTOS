@@ -2,22 +2,25 @@
 
 OpenTOS is a web-based, Autodesk-inspired Generative Design platform focused on structural components. It supports preserved/fixed geometry locking, force definition, async study execution, and side-by-side outcome comparison with organic load-path-driven variants.
 
+The workspace follows the OpenCAE design language (esaueng/OpenCAE): a dark viewport-first shell with a top project bar, a left step-based workflow (Model → Preserve → Constraints → Loads → Study → Generate → Results), a context panel for the active step, and a bottom outcome strip.
+
 ## Features
 
 - Upload `STL`, `OBJ`, or `GLB` models.
+- Guided step workflow with per-step completion state and a run-readiness checklist.
 - Brush-paint design, preserved, fixed, and obstacle regions directly on triangle faces.
 - One-click contiguous preserved-surface selection (for example, full through-hole wall selection in one click).
-- Place and edit multiple force vectors in 3D.
+- Place and edit multiple force vectors in 3D, grouped into load cases.
 - Define study targets (safety factor, mass-reduction goal, outcome count).
 - Run asynchronous studies via v2 study/job endpoints and monitor staged progress.
-- Compare multiple outcomes in an Autodesk-style grid with:
+- Compare ranked outcomes in a bottom outcome strip with:
   - Volume
   - Mass estimate
   - Mass reduction %
   - Stress proxy
   - Displacement proxy
   - Safety proxy
-- Toggle original vs generated overlays and wireframe inspection.
+- Toggle original vs generated overlays and wireframe inspection from the viewer toolbar.
 
 ## Monorepo Layout
 
