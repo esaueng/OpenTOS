@@ -7,11 +7,21 @@ from contextlib import contextmanager
 from app.core.config import settings
 
 
+def _connect() -> sqlite3.Connection:
+    # Jobs update progress from worker threads while request handlers poll, so
+    # the database needs WAL (concurrent reader/writer) and a busy timeout
+    # instead of failing immediately with "database is locked".
+    conn = sqlite3.connect(settings.sqlite_path, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
+
+
 def init_db() -> None:
     settings.data_root.mkdir(parents=True, exist_ok=True)
     settings.studies_root.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(settings.sqlite_path) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS studies_v2 (
@@ -150,10 +160,13 @@ def init_db() -> None:
 
 @contextmanager
 def db_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.sqlite_path)
+    conn = _connect()
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

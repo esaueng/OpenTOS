@@ -57,10 +57,17 @@ def get_study(study_id: str, manager: JobManager = Depends(get_job_manager)) -> 
 
 
 @router.post("/studies/{study_id}/run", response_model=StudyRunResponse)
-def run_study(study_id: str, body: RunOptions, request: Request, manager: JobManager = Depends(get_job_manager)) -> StudyRunResponse:
-    validate_run_options_payload(body.model_dump(mode="json", exclude_none=True))
+def run_study(
+    study_id: str,
+    request: Request,
+    body: RunOptions | None = None,
+    manager: JobManager = Depends(get_job_manager),
+) -> StudyRunResponse:
+    # Run options are documented as optional; an absent body means defaults.
+    options = body if body is not None else RunOptions()
+    validate_run_options_payload(options.model_dump(mode="json", exclude_none=True))
     try:
-        job_id = manager.run_study(study_id, body)
+        job_id = manager.run_study(study_id, options)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
