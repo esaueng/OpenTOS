@@ -1,3 +1,4 @@
+import { estimateSolverMemoryBytes } from "./geometry";
 import type { BrowserQualityProfile, QualityProfileConfig } from "./types";
 
 const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
@@ -35,44 +36,36 @@ const QUALITY_PROFILES: Record<BrowserQualityProfile, QualityProfileConfig> = {
 
 const QUALITY_ORDER: BrowserQualityProfile[] = ["high-fidelity", "balanced", "fast-preview"];
 
-export function resolveQualityProfile(requested: BrowserQualityProfile, estimatedBytes: number): {
+const MEMORY_BUDGET_BYTES = 1_300_000_000;
+
+export function resolveQualityProfile(
+  requested: BrowserQualityProfile,
+  outcomeCount: number,
+  memoryBudgetBytes = MEMORY_BUDGET_BYTES
+): {
   profile: QualityProfileConfig;
   warnings: string[];
 } {
   const warnings: string[] = [];
-  const memoryBudget = 1_300_000_000;
+  const requestedProfile = QUALITY_PROFILES[requested];
 
-  let chosen = QUALITY_PROFILES[requested];
-  if (estimatedBytes <= memoryBudget) {
-    return { profile: chosen, warnings };
+  if (estimateSolverMemoryBytes(requestedProfile.targetVoxels, outcomeCount) <= memoryBudgetBytes) {
+    return { profile: requestedProfile, warnings };
   }
 
-  const startIdx = QUALITY_ORDER.indexOf(requested);
-  for (let i = Math.max(startIdx, 0) + 1; i < QUALITY_ORDER.length; i += 1) {
+  for (let i = QUALITY_ORDER.indexOf(requested) + 1; i < QUALITY_ORDER.length; i += 1) {
     const candidate = QUALITY_PROFILES[QUALITY_ORDER[i]];
-    const scale = candidate.targetVoxels / QUALITY_PROFILES[requested].targetVoxels;
-    if (estimatedBytes * scale <= memoryBudget) {
-      chosen = candidate;
-      warnings.push(
-        `Quality automatically downgraded to ${candidate.id} due to browser memory pressure.`
-      );
-      break;
+    if (estimateSolverMemoryBytes(candidate.targetVoxels, outcomeCount) <= memoryBudgetBytes) {
+      warnings.push(`Quality automatically downgraded to ${candidate.id} due to browser memory pressure.`);
+      return { profile: candidate, warnings };
     }
   }
 
-  if (chosen.id === requested) {
-    const fallback = QUALITY_PROFILES["fast-preview"];
-    if (requested !== fallback.id) {
-      warnings.push(
-        `Quality automatically downgraded to ${fallback.id}; requested ${requested} exceeded safe memory budget.`
-      );
-      chosen = fallback;
-    }
+  const fallback = QUALITY_PROFILES["fast-preview"];
+  if (requested !== fallback.id) {
+    warnings.push(
+      `Quality automatically downgraded to ${fallback.id}; requested ${requested} exceeded safe memory budget.`
+    );
   }
-
-  return { profile: chosen, warnings };
-}
-
-export function qualityProfileConfig(profile: BrowserQualityProfile): QualityProfileConfig {
-  return QUALITY_PROFILES[profile];
+  return { profile: fallback, warnings };
 }

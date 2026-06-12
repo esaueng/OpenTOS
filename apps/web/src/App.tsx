@@ -13,7 +13,8 @@ import {
   getFixedFaceIndices,
   getObstacleFaceIndices,
   getPreservedFaceIndices,
-  initializeFaceLabels
+  initializeFaceLabels,
+  nextSequentialId
 } from "./lib/studyState";
 import type {
   BrowserQualityProfile,
@@ -63,13 +64,9 @@ const STAGES: JobStatus["stage"][] = [
   "complete"
 ];
 
-function makeLoadCaseId(index: number): string {
-  return `LC-${index}`;
-}
-
-function defaultLoadCase(index = 1): LoadCaseState {
+function defaultLoadCase(id = "LC-1"): LoadCaseState {
   return {
-    id: makeLoadCaseId(index),
+    id,
     fixedRegionIds: []
   };
 }
@@ -95,7 +92,7 @@ export default function App() {
   const [paintLabel, setPaintLabel] = useState<RegionLabel | null>("preserved");
   const [brushRadius, setBrushRadius] = useState(0.06);
   const [placeForceMode, setPlaceForceMode] = useState(false);
-  const [loadCases, setLoadCases] = useState<LoadCaseState[]>([defaultLoadCase(1)]);
+  const [loadCases, setLoadCases] = useState<LoadCaseState[]>([defaultLoadCase()]);
   const [selectedLoadCaseId, setSelectedLoadCaseId] = useState<string>("LC-1");
   const [forces, setForces] = useState<ForceState[]>([]);
   const [selectedForceId, setSelectedForceId] = useState<string | null>(null);
@@ -259,7 +256,7 @@ export default function App() {
 
     setModel(parsed);
     setFaceLabels(initializeFaceLabels(faceCount));
-    setLoadCases([defaultLoadCase(1)]);
+    setLoadCases([defaultLoadCase()]);
     setSelectedLoadCaseId("LC-1");
     setForces([]);
     setSelectedForceId(null);
@@ -284,12 +281,12 @@ export default function App() {
   const addForce = (point: [number, number, number], normal: [number, number, number]) => {
     let activeLoadCaseId = selectedLoadCaseId || loadCases[0]?.id || "LC-1";
     if (!loadCases.find((loadCase) => loadCase.id === activeLoadCaseId)) {
-      const next = defaultLoadCase(loadCases.length + 1);
+      const next = defaultLoadCase(nextSequentialId(loadCases.map((loadCase) => loadCase.id), "LC"));
       activeLoadCaseId = next.id;
       setLoadCases((current) => [...current, next]);
       setSelectedLoadCaseId(next.id);
     }
-    const id = `F-${forces.length + 1}`;
+    const id = nextSequentialId(forces.map((force) => force.id), "F");
     const force: ForceState = {
       id,
       loadCaseId: activeLoadCaseId,
@@ -324,8 +321,7 @@ export default function App() {
   };
 
   const addLoadCase = () => {
-    const nextIndex = loadCases.length + 1;
-    const next = defaultLoadCase(nextIndex);
+    const next = defaultLoadCase(nextSequentialId(loadCases.map((loadCase) => loadCase.id), "LC"));
     setLoadCases((current) => [...current, next]);
     setSelectedLoadCaseId(next.id);
   };
@@ -512,11 +508,14 @@ export default function App() {
               reject(new Error(event.message || "Browser worker crashed"));
             };
 
+            // The worker solves from the transferred position buffer; the
+            // encoded source model is only needed for API submissions, so
+            // avoid cloning the (potentially large) base64 payload here.
             worker.postMessage(
               {
                 type: "solve",
                 payload: {
-                  request: payload,
+                  request: { ...payload, model: { ...payload.model, dataBase64: "" } },
                   geometry: { positions: transferablePositions },
                   qualityProfile
                 }

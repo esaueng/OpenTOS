@@ -6,7 +6,6 @@ import { resolveQualityProfile } from "./solver/config";
 import {
   buildVoxelGrid,
   computeBoundingBox,
-  estimateSolverMemoryBytes,
   faceCountFromPositions,
   faceCenter,
   getFaceSet,
@@ -17,7 +16,7 @@ import { exportOutcomeGlb } from "./solver/export";
 import { clamp01 } from "./solver/math";
 import { extractIsoSurface, makePreservedGeometry } from "./solver/mesh";
 import { computeOutcomeMetrics, geometryVolume } from "./solver/metrics";
-import { solveDensityField } from "./solver/optimize";
+import { retainConnectedToAnchors, solveDensityField } from "./solver/optimize";
 import type {
   BrowserQualityProfile,
   ForceVec,
@@ -191,14 +190,6 @@ function addScaled3(
   scale: number
 ): [number, number, number] {
   return [base[0] + dir[0] * scale, base[1] + dir[1] * scale, base[2] + dir[2] * scale];
-}
-
-function projectOntoPlane(
-  v: [number, number, number],
-  normal: [number, number, number]
-): [number, number, number] {
-  const d = dot3(v, normal);
-  return [v[0] - normal[0] * d, v[1] - normal[1] * d, v[2] - normal[2] * d];
 }
 
 function orthonormalFallback(axis: [number, number, number]): {
@@ -420,52 +411,12 @@ function buildTrussBoostField(
   domainMask: Uint8Array,
   surfaceDistance: Float32Array,
   preservedTargets: SolverTarget[],
-  forces: ForceVec[]
+  forces: ForceVec[],
+  segments: ConnectorSegment[]
 ): Float32Array {
   const out = new Float32Array(grid.total);
   if (preservedTargets.length < 2) {
     return out;
-  }
-
-  const segments: Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> = [];
-  const pairKeys = new Set<string>();
-  for (let i = 0; i < preservedTargets.length; i += 1) {
-    const nearest = preservedTargets
-      .map((target, idx) => ({
-        idx,
-        dist2: idx === i ? Number.POSITIVE_INFINITY : pointDistanceSquared(preservedTargets[i].point, target.point)
-      }))
-      .filter((entry) => preservedTargets[entry.idx].groupId !== preservedTargets[i].groupId)
-      .sort((a, b) => a.dist2 - b.dist2)
-      .slice(0, preservedTargets[i].role === "anchor" ? 2 : 1);
-    for (const entry of nearest) {
-      const left = Math.min(i, entry.idx);
-      const right = Math.max(i, entry.idx);
-      const key = `${left}:${right}`;
-      if (pairKeys.has(key)) {
-        continue;
-      }
-      pairKeys.add(key);
-      segments.push({
-        start: preservedTargets[left].point,
-        end: preservedTargets[right].point,
-        weight: Math.sqrt(Math.max(preservedTargets[left].weight * preservedTargets[right].weight, 0.25))
-      });
-    }
-  }
-
-  for (const force of forces) {
-    const nearestTargets = preservedTargets
-      .map((target) => ({ target, dist2: pointDistanceSquared(force.point, target.point) }))
-      .sort((a, b) => a.dist2 - b.dist2)
-      .slice(0, Math.min(3, preservedTargets.length));
-    for (const entry of nearestTargets) {
-      segments.push({
-        start: force.point,
-        end: entry.target.point,
-        weight: Math.max(0.75, Math.sqrt(entry.target.weight) * 0.95)
-      });
-    }
   }
 
   const sigma = Math.max(grid.step * 1.6, grid.step * (preservedTargets.length > 3 ? 1.5 : 1.8));
@@ -508,11 +459,16 @@ function buildTrussBoostField(
   return out;
 }
 
-function buildConnectorSegments(
-  preservedTargets: SolverTarget[],
-  forces: ForceVec[]
-): Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> {
-  const segments: Array<{ start: [number, number, number]; end: [number, number, number]; weight: number }> = [];
+type ConnectorSegment = {
+  start: [number, number, number];
+  end: [number, number, number];
+  weight: number;
+};
+
+// Shared by the truss boost field and the connector rasterizer: nearest-pair
+// links across distinct interface groups plus force-to-interface struts.
+function buildConnectorSegments(preservedTargets: SolverTarget[], forces: ForceVec[]): ConnectorSegment[] {
+  const segments: ConnectorSegment[] = [];
   const pairKeys = new Set<string>();
   for (let i = 0; i < preservedTargets.length; i += 1) {
     const nearest = preservedTargets
@@ -550,7 +506,7 @@ function buildConnectorSegments(
       segments.push({
         start: force.point,
         end: preservedTargets[entry.idx].point,
-        weight: Math.max(0.7, Math.sqrt(preservedTargets[entry.idx].weight) * 0.9)
+        weight: Math.max(0.75, Math.sqrt(preservedTargets[entry.idx].weight) * 0.95)
       });
     }
   }
@@ -561,7 +517,7 @@ function buildConnectorSegments(
 function rasterizeConnectorMask(
   grid: ReturnType<typeof buildVoxelGrid>,
   domainMask: Uint8Array,
-  segments: Array<{ start: [number, number, number]; end: [number, number, number] }>,
+  segments: ConnectorSegment[],
   radius: number
 ): Uint8Array {
   const mask = new Uint8Array(grid.total);
@@ -641,66 +597,6 @@ function thresholdFromMaskedValues(
   return 0.5;
 }
 
-function retainConnectedToAnchorsLocal(
-  occupancy: Uint8Array,
-  domainMask: Uint8Array,
-  anchorMask: Uint8Array,
-  preserveMask: Uint8Array,
-  grid: ReturnType<typeof buildVoxelGrid>
-): Uint8Array {
-  const kept = new Uint8Array(occupancy.length);
-  const visited = new Uint8Array(occupancy.length);
-  const queue = new Int32Array(occupancy.length);
-  let head = 0;
-  let tail = 0;
-
-  const enqueue = (idx: number): void => {
-    if (visited[idx] || !domainMask[idx] || !occupancy[idx]) {
-      return;
-    }
-    visited[idx] = 1;
-    kept[idx] = 1;
-    queue[tail] = idx;
-    tail += 1;
-  };
-
-  for (let i = 0; i < occupancy.length; i += 1) {
-    if (anchorMask[i] || preserveMask[i]) {
-      enqueue(i);
-    }
-  }
-
-  while (head < tail) {
-    const idx = queue[head];
-    head += 1;
-    const z = Math.floor(idx / (grid.nx * grid.ny));
-    const y = Math.floor((idx - z * grid.nx * grid.ny) / grid.nx);
-    const x = idx - z * grid.nx * grid.ny - y * grid.nx;
-    const neighbors = [
-      [x + 1, y, z],
-      [x - 1, y, z],
-      [x, y + 1, z],
-      [x, y - 1, z],
-      [x, y, z + 1],
-      [x, y, z - 1]
-    ] as const;
-    for (const [nx, ny, nz] of neighbors) {
-      if (nx < 0 || ny < 0 || nz < 0 || nx >= grid.nx || ny >= grid.ny || nz >= grid.nz) {
-        continue;
-      }
-      enqueue(nx + grid.nx * (ny + grid.ny * nz));
-    }
-  }
-
-  for (let i = 0; i < preserveMask.length; i += 1) {
-    if (preserveMask[i]) {
-      kept[i] = 1;
-    }
-  }
-
-  return kept;
-}
-
 async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ outcomes: OutcomeV2[]; qualityProfile: BrowserQualityProfile; warnings: string[] }> {
   const request = payload.request;
   const warnings: string[] = [];
@@ -740,8 +636,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
     throw new Error("No force definitions provided");
   }
 
-  const estimatedMemory = estimateSolverMemoryBytes(3_200_000, request.targets.outcomeCount);
-  const qualityResolution = resolveQualityProfile(payload.qualityProfile, estimatedMemory);
+  const qualityResolution = resolveQualityProfile(payload.qualityProfile, request.targets.outcomeCount);
   const qualityConfig = qualityResolution.profile;
   warnings.push(...qualityResolution.warnings);
 
@@ -817,10 +712,19 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
 
   const interfaceProfiles = buildInterfaceProfiles(positions, preservedData.groups);
   const preservedTargets = buildSolverTargets(interfaceProfiles);
+  const connectorSegments = buildConnectorSegments(preservedTargets, forces);
   const trussBoostField =
     preservedTargets.length >= 2
-      ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces)
+      ? buildTrussBoostField(grid, constrainedDomain, surfaceDistance, preservedTargets, forces, connectorSegments)
       : null;
+  const connectorMask = connectorSegments.length
+    ? rasterizeConnectorMask(
+        grid,
+        constrainedDomain,
+        connectorSegments,
+        Math.max(grid.step * 2.1, bbox.diagonal * 0.012)
+      )
+    : null;
 
   postProgress({
     stage: "fem-solve",
@@ -901,10 +805,7 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
       surfaceDistance
     });
 
-    const connectorSegments = buildConnectorSegments(preservedTargets, forces);
-    if (connectorSegments.length) {
-      const connectorRadius = Math.max(grid.step * 2.1, bbox.diagonal * 0.012);
-      const connectorMask = rasterizeConnectorMask(grid, constrainedDomain, connectorSegments, connectorRadius);
+    if (connectorMask) {
       for (let i = 0; i < connectorMask.length; i += 1) {
         if (!connectorMask[i]) {
           continue;
@@ -931,19 +832,19 @@ async function solveInWorker(payload: WorkerInMessage["payload"]): Promise<{ out
         densityResult.density[i] = Math.min(densityResult.density[i], 0.42);
       }
     }
-    let refinedOccupancy = retainConnectedToAnchorsLocal(
+    let refinedOccupancy = retainConnectedToAnchors(
       densityResult.occupancy,
       constrainedDomain,
-      forceSeeds,
       preserveMask,
+      forceSeeds,
       grid
     );
     refinedOccupancy = erodeMask(dilateMask(refinedOccupancy, grid, 1), grid, 1);
-    refinedOccupancy = retainConnectedToAnchorsLocal(
+    refinedOccupancy = retainConnectedToAnchors(
       refinedOccupancy,
       constrainedDomain,
-      forceSeeds,
       preserveMask,
+      forceSeeds,
       grid
     );
     densityResult.occupancy = refinedOccupancy;

@@ -8,10 +8,6 @@ export function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-export function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
 export function hash01(seed: number): number {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -35,16 +31,6 @@ export function voxelCenter(grid: VoxelGrid, x: number, y: number, z: number): [
     grid.origin[1] + (y + 0.5) * grid.step,
     grid.origin[2] + (z + 0.5) * grid.step
   ];
-}
-
-export function volumeOfOccupancy(mask: Uint8Array): number {
-  let count = 0;
-  for (let i = 0; i < mask.length; i += 1) {
-    if (mask[i]) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 export function normalizeVector(v: [number, number, number]): [number, number, number] {

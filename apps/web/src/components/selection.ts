@@ -241,8 +241,8 @@ function minSurfaceHops(
   const queue: Array<{ faceIndex: number; hops: number }> = [{ faceIndex: startFaceIndex, hops: 0 }];
   visited[startFaceIndex] = 1;
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head];
     for (const next of topology.adjacency[current.faceIndex]) {
       if (visited[next] || !allowedFaces.has(next)) {
         continue;

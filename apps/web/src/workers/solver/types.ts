@@ -107,10 +107,3 @@ export interface PreservedTarget {
   point: [number, number, number];
   weight: number;
 }
-
-export interface VariantResult {
-  id: string;
-  density: Float32Array;
-  occupancy: Uint8Array;
-  params: VariantParams;
-}

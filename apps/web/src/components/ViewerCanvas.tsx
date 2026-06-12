@@ -406,15 +406,19 @@ function EditablePart({
     const handleAuxClick = (nativeEvent: MouseEvent): void => maybeHandleSecondaryClick(nativeEvent);
     const handleContextMenu = (nativeEvent: MouseEvent): void => maybeHandleSecondaryClick(nativeEvent);
 
-    window.addEventListener("pointerdown", handlePointerDown, true);
-    window.addEventListener("mousedown", handleMouseDown, true);
-    window.addEventListener("auxclick", handleAuxClick, true);
-    window.addEventListener("contextmenu", handleContextMenu, true);
+    // Capture-phase listeners on the canvas element so right-click clears the
+    // selection before OrbitControls sees the event, without hijacking
+    // right-clicks elsewhere on the page.
+    const target = gl.domElement;
+    target.addEventListener("pointerdown", handlePointerDown, true);
+    target.addEventListener("mousedown", handleMouseDown, true);
+    target.addEventListener("auxclick", handleAuxClick, true);
+    target.addEventListener("contextmenu", handleContextMenu, true);
     return () => {
-      window.removeEventListener("pointerdown", handlePointerDown, true);
-      window.removeEventListener("mousedown", handleMouseDown, true);
-      window.removeEventListener("auxclick", handleAuxClick, true);
-      window.removeEventListener("contextmenu", handleContextMenu, true);
+      target.removeEventListener("pointerdown", handlePointerDown, true);
+      target.removeEventListener("mousedown", handleMouseDown, true);
+      target.removeEventListener("auxclick", handleAuxClick, true);
+      target.removeEventListener("contextmenu", handleContextMenu, true);
     };
   }, [camera, faceCount, faceLabels, gl.domElement, onPaintFaces, paintLabel, placeForceMode, surfaceTopology]);
 
