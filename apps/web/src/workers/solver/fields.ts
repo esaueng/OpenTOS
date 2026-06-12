@@ -146,7 +146,7 @@ function diffuseField(field: Float32Array, domainMask: Uint8Array, grid: VoxelGr
   return src;
 }
 
-export function normalizeForces(forces: ForceVec[]): ForceVec[] {
+function withNormalizedDirections(forces: ForceVec[]): ForceVec[] {
   return forces.map((force) => ({
     ...force,
     direction: normalizeVector(force.direction)
@@ -177,7 +177,7 @@ export function computeBaseInfluenceFields(
   const balanceScale = Math.max(diagonal * 0.24, grid.step * 2);
   const medialScale = Math.max(diagonal * 0.09, grid.step * 1.4);
 
-  const normalizedForces = normalizeForces(forces);
+  const normalizedForces = withNormalizedDirections(forces);
   const effectiveTargets = preservedTargets.length
     ? preservedTargets
     : [{ point: centroidFromMask(grid, preserveMask), weight: 1 }];
