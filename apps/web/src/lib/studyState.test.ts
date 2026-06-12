@@ -1,6 +1,13 @@
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { applyFaceLabels, buildSolvePayload, initializeFaceLabels, normalizeDirection } from "./studyState";
+import {
+  applyFaceLabels,
+  buildConstraintGroups,
+  buildSolvePayload,
+  initializeFaceLabels,
+  nextSequentialId,
+  normalizeDirection
+} from "./studyState";
 import { describe, expect, it } from "vitest";
 
 describe("study state helpers", () => {
@@ -44,16 +51,16 @@ describe("study state helpers", () => {
           label: "10lb"
         }
       ],
-      loadCases: [{ id: "LC-1", fixedRegionIds: ["fixed-1"] }],
+      loadCases: [{ id: "LC-1", fixedRegionIds: ["fixed-0"] }],
       material: "PETG",
       targetSafetyFactor: 2,
       outcomeCount: 4,
       massReductionGoalPct: 45
     });
 
-    expect(payload.preservedRegions[0].id).toBe("fixed-1");
-    expect(payload.preservedRegions[1].id).toBe("preserved-1");
-    expect(payload.loadCases[0].fixedRegions).toEqual(["fixed-1"]);
+    expect(payload.preservedRegions[0].id).toBe("fixed-0");
+    expect(payload.preservedRegions[1].id).toBe("preserved-2");
+    expect(payload.loadCases[0].fixedRegions).toEqual(["fixed-0"]);
     expect(payload.loadCases[0].forces[0].direction[2]).toBeCloseTo(-1);
     expect(payload.loadCases[0].forces[0].point).toEqual([-0.5, 0, 1]);
     expect(payload.targets.massReductionGoalPct).toBe(45);
@@ -106,8 +113,8 @@ describe("study state helpers", () => {
         }
       ],
       loadCases: [
-        { id: "LC-1", fixedRegionIds: ["fixed-1"] },
-        { id: "LC-2", fixedRegionIds: ["fixed-2"] }
+        { id: "LC-1", fixedRegionIds: ["fixed-0"] },
+        { id: "LC-2", fixedRegionIds: ["fixed-12"] }
       ],
       material: "PETG",
       targetSafetyFactor: 2,
@@ -116,13 +123,43 @@ describe("study state helpers", () => {
     });
 
     expect(payload.preservedRegions.map((region) => region.id)).toEqual([
-      "fixed-1",
-      "fixed-2",
-      "preserved-1",
-      "preserved-2"
+      "fixed-0",
+      "fixed-12",
+      "preserved-2",
+      "preserved-14"
     ]);
     expect(payload.loadCases).toHaveLength(2);
-    expect(payload.loadCases[0].fixedRegions).toEqual(["fixed-1"]);
-    expect(payload.loadCases[1].fixedRegions).toEqual(["fixed-2"]);
+    expect(payload.loadCases[0].fixedRegions).toEqual(["fixed-0"]);
+    expect(payload.loadCases[1].fixedRegions).toEqual(["fixed-12"]);
+  });
+
+  it("keeps region ids stable when an earlier group is painted later", () => {
+    const left = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+    left.translate(-2, 0, 0);
+    const right = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+    right.translate(2, 0, 0);
+    const geometry = BufferGeometryUtils.mergeGeometries([left, right], false)!;
+
+    const onlyRight = applyFaceLabels(initializeFaceLabels(24), [12, 13], "fixed");
+    const before = buildConstraintGroups(geometry, onlyRight);
+    expect(before.fixedRegions.map((region) => region.id)).toEqual(["fixed-12"]);
+
+    // Painting a new fixed group earlier in face order must not change the
+    // identity of the existing group; load-case references rely on this.
+    const withLeft = applyFaceLabels(onlyRight, [0, 1], "fixed");
+    const after = buildConstraintGroups(geometry, withLeft);
+    expect(after.fixedRegions.map((region) => region.id)).toEqual(["fixed-0", "fixed-12"]);
+
+    const rightRegionBefore = before.fixedRegions[0];
+    const rightRegionAfter = after.fixedRegions.find((region) => region.id === "fixed-12");
+    expect(rightRegionAfter?.faceIndices).toEqual(rightRegionBefore.faceIndices);
+  });
+
+  it("mints non-colliding sequential ids after deletions", () => {
+    expect(nextSequentialId([], "F")).toBe("F-1");
+    expect(nextSequentialId(["F-1", "F-2"], "F")).toBe("F-3");
+    // After deleting F-1, the next id must not collide with the surviving F-2.
+    expect(nextSequentialId(["F-2"], "F")).toBe("F-3");
+    expect(nextSequentialId(["LC-1", "LC-10", "F-99"], "LC")).toBe("LC-11");
   });
 });

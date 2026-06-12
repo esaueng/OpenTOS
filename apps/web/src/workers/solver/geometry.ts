@@ -3,17 +3,6 @@ import type { StudyCreateRequest } from "@contracts/index";
 
 import type { PreservedData, VoxelGrid } from "./types";
 
-export function toNonIndexedGeometryFromPositions(positions: Float32Array): THREE.BufferGeometry {
-  if (positions.length % 9 !== 0) {
-    throw new Error("Solve geometry positions must be non-indexed triangles");
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions.slice(), 3));
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
 export function faceCountFromPositions(positions: Float32Array): number {
   return Math.floor(positions.length / 9);
 }
@@ -174,25 +163,6 @@ export function faceArea(positions: Float32Array, faceIndex: number): number {
   const crossY = abz * acx - abx * acz;
   const crossZ = abx * acy - aby * acx;
   return 0.5 * Math.hypot(crossX, crossY, crossZ);
-}
-
-export function gatherPositionsByFaces(positions: Float32Array, faceIndices: number[]): Float32Array {
-  const out = new Float32Array(faceIndices.length * 9);
-  let cursor = 0;
-  for (const faceIndex of faceIndices) {
-    const src = faceIndex * 9;
-    out[cursor] = positions[src];
-    out[cursor + 1] = positions[src + 1];
-    out[cursor + 2] = positions[src + 2];
-    out[cursor + 3] = positions[src + 3];
-    out[cursor + 4] = positions[src + 4];
-    out[cursor + 5] = positions[src + 5];
-    out[cursor + 6] = positions[src + 6];
-    out[cursor + 7] = positions[src + 7];
-    out[cursor + 8] = positions[src + 8];
-    cursor += 9;
-  }
-  return out;
 }
 
 export function computeBoundingBox(positions: Float32Array): {

@@ -38,10 +38,6 @@ export interface StudySettings {
   massReductionGoalPct: number;
 }
 
-export interface BrowserSolveConfig {
-  qualityProfile: BrowserQualityProfile;
-}
-
 export interface JobStatus {
   jobId: string;
   studyId: string;

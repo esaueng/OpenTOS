@@ -171,6 +171,11 @@ def test_study_create_get_run_and_job_contracts() -> None:
         assert run_response.status_code == 200
         assert run_response.json()["jobId"] == "job_test"
 
+        # Run options are optional; a bodyless run must use defaults.
+        bodyless_run = client.post("/api/studies/study_test/run")
+        assert bodyless_run.status_code == 200
+        assert bodyless_run.json()["jobId"] == "job_test"
+
         status_response = client.get("/api/jobs/job_test")
         assert status_response.status_code == 200
         status_payload = status_response.json()

@@ -31,44 +31,47 @@ export function normalizeDirection(direction: [number, number, number]): [number
   return [x / length, y / length, z / length];
 }
 
-export function getPreservedFaceIndices(labels: RegionLabel[]): number[] {
-  const preserved: number[] = [];
-  labels.forEach((label, idx) => {
-    if (label === "preserved") {
-      preserved.push(idx);
+function faceIndicesMatching(labels: RegionLabel[], matches: (label: RegionLabel) => boolean): number[] {
+  const out: number[] = [];
+  for (let idx = 0; idx < labels.length; idx += 1) {
+    if (matches(labels[idx])) {
+      out.push(idx);
     }
-  });
-  return preserved;
+  }
+  return out;
+}
+
+export function getPreservedFaceIndices(labels: RegionLabel[]): number[] {
+  return faceIndicesMatching(labels, (label) => label === "preserved");
 }
 
 export function getFixedFaceIndices(labels: RegionLabel[]): number[] {
-  const fixed: number[] = [];
-  labels.forEach((label, idx) => {
-    if (label === "fixed") {
-      fixed.push(idx);
-    }
-  });
-  return fixed;
+  return faceIndicesMatching(labels, (label) => label === "fixed");
 }
 
 export function getObstacleFaceIndices(labels: RegionLabel[]): number[] {
-  const obstacle: number[] = [];
-  labels.forEach((label, idx) => {
-    if (label === "obstacle") {
-      obstacle.push(idx);
-    }
-  });
-  return obstacle;
+  return faceIndicesMatching(labels, (label) => label === "obstacle");
 }
 
 export function getDesignFaceIndices(labels: RegionLabel[]): number[] {
-  const design: number[] = [];
-  labels.forEach((label, idx) => {
-    if (label === "design" || label === "unassigned") {
-      design.push(idx);
+  return faceIndicesMatching(labels, (label) => label === "design" || label === "unassigned");
+}
+
+/**
+ * Returns the next id of the form `${prefix}-${n}` that does not collide with
+ * any existing id. Array length is not a safe source for `n`: deleting an
+ * entry and adding a new one would mint a duplicate id.
+ */
+export function nextSequentialId(existingIds: string[], prefix: string): string {
+  let maxSeen = 0;
+  const pattern = new RegExp(`^${prefix}-(\\d+)$`);
+  for (const id of existingIds) {
+    const match = pattern.exec(id);
+    if (match) {
+      maxSeen = Math.max(maxSeen, Number(match[1]));
     }
-  });
-  return design;
+  }
+  return `${prefix}-${maxSeen + 1}`;
 }
 
 export function mapDisplayPointToSolve(
@@ -113,7 +116,6 @@ function buildFaceGroups(
 
   for (const faceIndex of faceIndices) {
     adjacency.set(faceIndex, []);
-    const base = faceIndex * 9;
     const keys = [
       quantizedVertexKey(positions.getX(faceIndex * 3), positions.getY(faceIndex * 3), positions.getZ(faceIndex * 3)),
       quantizedVertexKey(positions.getX(faceIndex * 3 + 1), positions.getY(faceIndex * 3 + 1), positions.getZ(faceIndex * 3 + 1)),
@@ -188,16 +190,20 @@ export function buildConstraintGroups(
   preservedRegions: FaceRegion[];
   obstacleRegions: FaceRegion[];
 } {
-  const fixedRegions = buildFaceGroups(geometry, labels, "fixed").map((faceIndices, index) => ({
-    id: `fixed-${index + 1}`,
+  // Region ids are keyed by the group's smallest face index, not its position
+  // in the group list. Positional ids ("fixed-1", "fixed-2") silently remap
+  // load-case references whenever painting adds or removes a group earlier in
+  // face order; min-face ids stay stable for groups that did not change.
+  const fixedRegions = buildFaceGroups(geometry, labels, "fixed").map((faceIndices) => ({
+    id: `fixed-${faceIndices[0]}`,
     faceIndices
   }));
-  const preservedRegions = buildFaceGroups(geometry, labels, "preserved").map((faceIndices, index) => ({
-    id: `preserved-${index + 1}`,
+  const preservedRegions = buildFaceGroups(geometry, labels, "preserved").map((faceIndices) => ({
+    id: `preserved-${faceIndices[0]}`,
     faceIndices
   }));
-  const obstacleRegions = buildFaceGroups(geometry, labels, "obstacle").map((faceIndices, index) => ({
-    id: `obstacle-${index + 1}`,
+  const obstacleRegions = buildFaceGroups(geometry, labels, "obstacle").map((faceIndices) => ({
+    id: `obstacle-${faceIndices[0]}`,
     faceIndices
   }));
 
@@ -206,6 +212,17 @@ export function buildConstraintGroups(
     preservedRegions,
     obstacleRegions
   };
+}
+
+function fallbackDesignFaceIndices(labels: RegionLabel[], preserved: number[], fixed: number[]): number[] {
+  const excluded = new Set<number>([...preserved, ...fixed]);
+  const out: number[] = [];
+  for (let idx = 0; idx < labels.length; idx += 1) {
+    if (!excluded.has(idx)) {
+      out.push(idx);
+    }
+  }
+  return out;
 }
 
 export function buildActiveLoadCases(
@@ -240,12 +257,7 @@ export function buildSolvePayload(args: BuildSolvePayloadArgs): SolvePayload {
     },
     units: args.units,
     designRegion: {
-      faceIndices:
-        design.length > 0
-          ? design
-          : args.faceLabels
-              .map((_, idx) => idx)
-              .filter((idx) => !preserved.includes(idx) && !fixed.includes(idx))
+      faceIndices: design.length > 0 ? design : fallbackDesignFaceIndices(args.faceLabels, preserved, fixed)
     },
     preservedRegions,
     obstacleRegions: obstacle.length ? groups.obstacleRegions : [],

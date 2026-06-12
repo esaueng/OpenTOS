@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import traceback
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -33,6 +33,8 @@ from app.solver.interfaces import SolverAdapter
 from app.solver.normalization import normalize_study
 from app.utils.encoding import bytes_to_b64
 
+logger = logging.getLogger(__name__)
+
 
 def _row_to_outcome(row: dict) -> OutcomeV2:
     glb_bytes = Path(row["glb_path"]).read_bytes()
@@ -50,6 +52,10 @@ class JobManager:
         self._solver: SolverAdapter = solver or FusionApproxSolver()
         self._solver_version = getattr(self._solver, "solver_version", "opentos-v2.0.0")
         self._executor = ThreadPoolExecutor(max_workers=settings.max_workers)
+
+    def shutdown(self) -> None:
+        """Stop accepting jobs and let in-flight solves finish."""
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def create_study(self, request: StudyCreateRequest) -> StudyDefinition:
         study_id, created_at = create_study_v2(request.model_dump(mode="json"))
@@ -108,13 +114,8 @@ class JobManager:
         )
 
     def _run_job(self, job_id: str, study: StudyDefinition, run_options: RunOptions) -> None:
-        study_dir = settings.studies_root / study.id
-        baseline_dir = study_dir / "baseline"
-        outcomes_dir = study_dir / "outcomes"
-        reports_dir = study_dir / "reports"
-        baseline_dir.mkdir(parents=True, exist_ok=True)
+        outcomes_dir = settings.studies_root / study.id / "outcomes"
         outcomes_dir.mkdir(parents=True, exist_ok=True)
-        reports_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             update_job_v2(
@@ -168,7 +169,7 @@ class JobManager:
                 error=None,
             )
         except Exception as exc:
-            traceback.print_exc()
+            logger.exception("Job %s for study %s failed", job_id, study.id)
             update_job_v2(
                 job_id,
                 status=JobStateV2.failed.value,
