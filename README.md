@@ -40,6 +40,8 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+Optional environment overrides (`OPENTOS_DATA_DIR`, `OPENTOS_MAX_WORKERS`) are documented in `apps/api/README.md`.
+
 ## 2) Web
 
 ```bash
