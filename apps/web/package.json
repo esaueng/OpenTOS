@@ -11,9 +11,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@opentos/contracts": "0.1.0",
     "@react-three/drei": "^9.119.1",
     "@react-three/fiber": "^8.17.14",
-    "@opentos/contracts": "0.1.0",
+    "lucide-react": "^0.469.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.173.0",

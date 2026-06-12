@@ -5,9 +5,15 @@
 - React + TypeScript + Vite.
 - TypeScript is the only tracked source of truth for the web app; generated JS is not kept in `src/`.
 - Browser-local solve is the canonical runtime; API execution is optional offload/reference.
-- `@react-three/fiber` viewer with face brush painting for design/preserved/fixed/obstacle labeling.
-- Force placement by clicking mesh surfaces and editing direction/magnitude in-panel.
-- Outcome grid supports side-by-side comparison with thumbnail previews and metric cards.
+- Workspace shell adapted from the OpenCAE design system (`src/theme/tokens.css`, `src/styles/app.css`):
+  - `AppShell`: top bar / stepbar + viewport + context panel / outcome strip / status strip.
+  - `StepBar`: Model → Preserve → Constraints → Loads → Study → Generate → Results, with completion state.
+  - `ContextPanel` + `components/panels/*`: per-step controls, helper copy, and validation.
+  - `lib/workflow.ts`: pure step-completion / run-readiness model (tested).
+- `@react-three/fiber` viewer (`GenerativeDesignViewer` inside `ViewerShell`) with face brush painting for
+  design/preserved/fixed/obstacle labeling, a viewer toolbar (original/generated/wireframe/fit), and a region legend.
+- Force placement by clicking mesh surfaces and editing direction/magnitude in the Loads panel.
+- Ranked outcomes compare side-by-side in the bottom `OutcomePanel` with thumbnail previews and metric cards.
 - Browser worker solver stack in `apps/web/src/workers/solver`:
   - `voxel.ts`: domain voxelization + flood fill + seed distances
   - `fields.ts`: directional/connectivity/boundary influence fields
