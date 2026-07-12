@@ -1,178 +1,173 @@
-# OpenTOS Generative Design Platform
+# OpenTOS
 
-OpenTOS is a web-based, Autodesk-inspired Generative Design platform focused on structural components. It supports preserved/fixed geometry locking, force definition, async study execution, and side-by-side outcome comparison with organic load-path-driven variants.
+OpenTOS is a structural generative-design workspace for engineers and makers who need to turn a mesh, boundary conditions, and performance targets into a small set of comparable design candidates. It combines desktop 3D study authoring, durable project/run provenance, an AI study copilot, and a table-first results review experience. The included topology engine is an explicitly labeled preview approximation; it does **not** present proxy stress or safety values as verified FEA.
 
-## Features
+## What changed in the rebuild
 
-- Upload `STL`, `OBJ`, or `GLB` models.
-- Brush-paint design, preserved, fixed, and obstacle regions directly on triangle faces.
-- One-click contiguous preserved-surface selection (for example, full through-hole wall selection in one click).
-- Place and edit multiple force vectors in 3D.
-- Define study targets (safety factor, mass-reduction goal, outcome count).
-- Run asynchronous studies via v2 study/job endpoints and monitor staged progress.
-- Compare multiple outcomes in an Autodesk-style grid with:
-  - Volume
-  - Mass estimate
-  - Mass reduction %
-  - Stress proxy
-  - Displacement proxy
-  - Safety proxy
-- Toggle original vs generated overlays and wireframe inspection.
+- Project-oriented v3 platform with durable projects, model revisions, study drafts, runs, outcomes, AI traces, and content-addressed artifacts.
+- New desktop engineering workspace with guided readiness checks and a runnable sample study.
+- Results comparison with a complete outcome table, directly labeled mass-versus-safety SVG plot, synchronized 3D viewer, constraint checks, and solver provenance.
+- Mobile results companion with one document scroll; geometry authoring stays desktop-only.
+- Configurable OpenAI Responses API integration with structured output, bounded read-only tools, trace persistence, and a deterministic no-key fallback.
+- Legacy v2 data and public endpoints remain available. Startup migration exposes existing v2 studies as v3 projects without deleting or rewriting the original records.
 
-## Monorepo Layout
+## Runtime modes
 
-- `apps/web`: React + TypeScript + Vite UI + three.js viewer.
-- `apps/api`: FastAPI backend with modular solver adapter.
-- `packages/contracts`: shared TypeScript interfaces and JSON schema.
-- `assets/samples`: connecting-rod sample mesh (`OBJ`, `STL`, `GLB`).
-- `scripts/generate_sample_part.py`: reproducible sample generator.
-- `docs`: assumptions, architecture, and extension notes.
+OpenTOS supports two explicit execution modes:
 
-## Quick Start
+| Mode | Configuration | Persistence | Intended use |
+| --- | --- | --- | --- |
+| Browser preview | `VITE_SOLVER_MODE=browser` (default) | Current browser session | Fast local evaluation and static hosting |
+| Platform API | `VITE_SOLVER_MODE=api` | SQLite/Postgres metadata + filesystem artifacts | Durable projects, resumable run records, AI copilot |
 
-## 1) API
+Both bundled solver paths currently use the OpenTOS voxel approximation. Every generated outcome is marked `preview`. A requested `linear-static` run is downgraded with an explicit warning until a real verification adapter is installed.
+
+## Quick start
+
+Prerequisites: Node.js 20+, npm, and Python 3.12+.
 
 ```bash
-cd apps/api
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-Optional environment overrides (`OPENTOS_DATA_DIR`, `OPENTOS_MAX_WORKERS`) are documented in `apps/api/README.md`.
-
-## 2) Web
-
-```bash
-cd apps/web
 npm install
-npm run dev
+python3.12 -m venv apps/api/.venv
+apps/api/.venv/bin/pip install -r apps/api/requirements.txt
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
-
-### Browser-First Runtime (No Backend Required)
-
-The product default is local in-browser solving through a Web Worker. The FastAPI service is optional offload/reference execution, not the primary deployment requirement.
-
-- Default mode: `browser`
-- Optional API mode: set `VITE_SOLVER_MODE=api`
-
-To force browser mode explicitly:
+Run the API and web app in separate terminals:
 
 ```bash
-cd apps/web
-echo 'VITE_SOLVER_MODE=browser' > .env.local
-npm run dev
+npm run dev:api
 ```
 
-In browser mode, `Run Generative Study` runs locally in a worker and streams progress in the UI.
-
-The browser solver synthesis is tuned for Autodesk/Discovery-style visuals:
-
-- Volumetric voxel-domain synthesis with directional load-path influence fields
-- Density evolution with smoothing/projection to avoid jagged voxel artifacts
-- Marching-tetrahedra reconstruction + Taubin smoothing for flowing ribs/cutouts
-- Strict preserved-interface locking with preserved triangles exported unchanged
-
-Quality profiles are available for browser solve mode:
-
-- `High Fidelity` (default): highest organic fidelity, longer runtime.
-- `Balanced`: reduced voxel count and iteration budget.
-- `Fast Preview`: fastest turnaround with lower geometric richness.
-
-## 3) Use the sample part
-
-- Click `Load Sample Connecting Rod` in the UI, or upload files from:
-- `assets/samples/connecting_rod_sample.obj`
-- `assets/samples/connecting_rod_sample.stl`
-- `assets/samples/connecting_rod_sample.glb`
-
-## API Contract
-
-### `POST /api/studies`
-Creates a study definition from mesh + constraints + load cases.
-
-### `GET /api/studies/{studyId}`
-Returns persisted study definition.
-
-### `POST /api/studies/{studyId}/run`
-Starts an async run with optional run options (`qualityProfile`, `seed`, `outcomeCountOverride`).
-
-### `GET /api/jobs/{jobId}`
-Returns job state, v2 stage, progress, warnings, solver version, and final outcomes when complete.
-
-### `GET /api/studies/{studyId}/outcomes`
-Returns all generated outcomes for a study.
-
-### `GET /api/benchmarks/{benchmarkId}`
-Returns built-in benchmark templates/reports for parity checks.
-
-### `GET /api/materials`
-Returns available materials (MVP default: Aluminum 6061).
-
-## Generative Assumptions
-
-- The MVP solver approximates topology behavior with voxel-field synthesis.
-- Material is retained along force-preserved/fixed connectivity and directional influence.
-- Variants are generated by parameter sweeps over threshold/smoothing/rib emphasis.
-- Proxy metrics are deterministic but non-FEA.
-
-Detailed notes: `docs/solver-assumptions.md`.
-
-## Limitations vs Autodesk Fusion 360 Generative Design
-
-- No full finite-element analysis for true stress/displacement.
-- No manufacturing-constraint-coupled solve in MVP.
-- No cloud-scale optimization backend or design-space objective ranking.
-- Outcome quality depends on voxel resolution and mesh quality.
-
-## Extending with Real Solvers
-
-- Implement `SolverAdapter` in `apps/api/app/solver/interfaces.py`.
-- Keep output shape aligned with `OutcomeV2` (GLB + `OutcomeMetricsV2`).
-- Inject your solver into `JobManager` startup.
-
-See `docs/extension-guide.md` for detailed integration guidance.
-
-## Testing
-
-### Backend
-
 ```bash
-cd apps/api
-pytest
+npm run dev:web
 ```
 
-### Frontend
+Open [http://localhost:5173](http://localhost:5173). Choose **Use sample part** for a ready-to-run connecting-rod study with deterministic support, preserved-interface, and load presets.
+
+### Durable platform mode
+
+Create `apps/web/.env.local`:
+
+```dotenv
+VITE_SOLVER_MODE=api
+VITE_API_BASE=http://localhost:8000
+```
+
+Restart the web dev server. Project creation, uploads, studies, runs, artifacts, and Copilot requests will now use `/api/v3`.
+
+## AI configuration
+
+All model settings are centralized in `apps/api/app/core/config.py` and may be overridden with environment variables:
 
 ```bash
-cd apps/web
+export OPENAI_API_KEY="..."
+export AI_PROVIDER="openai"
+export AI_MODEL="gpt-5.6-sol"
+export AI_REASONING_EFFORT="xhigh"
+export AI_TIMEOUT_SECONDS="90"
+```
+
+The defaults match the model and reasoning effort selected for this rebuild. `AI_MODEL` and `AI_REASONING_EFFORT` are deployment configuration, not strings repeated through the codebase. Set `AI_PROVIDER=disabled` to force the deterministic local fallback. API keys are never stored in project data or frontend bundles.
+
+The Copilot uses the Responses API with:
+
+- JSON-schema structured output;
+- a maximum of three read-only tool rounds;
+- bounded `inspect_mesh`, `validate_study`, and `list_outcomes` tools;
+- no raw model bytes in prompts;
+- explicit proposed patches that require user review;
+- persisted provider/model/latency trace metadata.
+
+## Architecture
+
+```text
+React routes + TanStack Query + Zustand
+        │
+        ├── browser mode ── Web Worker preview solver
+        │
+        └── API mode ────── FastAPI /api/v3
+                                  │
+                    SQLAlchemy repository + artifact store
+                                  │
+                 preview solver / configurable AI provider
+```
+
+- `apps/web`: React, TypeScript, Vite, React Router, TanStack Query, Zustand, Three.js, accessible SVG comparison chart.
+- `apps/api`: FastAPI, Pydantic, SQLAlchemy, OpenAI Responses API integration, durable run manager.
+- `packages/contracts`: shared v2 compatibility and v3 project/run contracts.
+- `data/opentos.db`: default SQLite database.
+- `data/artifacts`: content-addressed source models, outcomes, logs, and reports.
+- `docs/design`: approved visual references and implementation contract.
+
+See [docs/architecture.md](docs/architecture.md) for component and data-flow details.
+
+## API surface
+
+Primary v3 routes:
+
+- `GET|POST /api/v3/projects`
+- `POST /api/v3/projects/{projectId}/models`
+- `POST /api/v3/projects/{projectId}/studies`
+- `GET /api/v3/studies/{studyId}`
+- `GET /api/v3/studies/{studyId}/readiness`
+- `POST /api/v3/projects/{projectId}/studies/{studyId}/runs`
+- `GET /api/v3/runs/{runId}`
+- `GET /api/v3/runs/{runId}/events`
+- `POST /api/v3/runs/{runId}/cancel`
+- `GET /api/v3/artifacts/{artifactId}`
+- `POST /api/v3/projects/{projectId}/copilot`
+- `POST /api/v3/projects/{projectId}/copilot/events`
+
+The original `/api/studies`, `/api/jobs`, `/api/materials`, and `/api/benchmarks` endpoints are preserved for existing clients.
+
+## Configuration
+
+Backend variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENTOS_DATA_DIR` | `<repo>/data` | Database and artifact root |
+| `DATABASE_URL` | SQLite in the data root | SQLAlchemy database URL |
+| `STORAGE_BACKEND` | `filesystem` | Artifact storage selection |
+| `OPENTOS_MAX_WORKERS` | `2` | Background solver concurrency |
+| `OPENTOS_MAX_UPLOAD_BYTES` | `104857600` | Upload limit |
+| `OPENTOS_DEFAULT_QUALITY` | `balanced` | Default solver quality |
+| `OPENTOS_CORS_ORIGINS` | local Vite origins | Comma-separated browser origins |
+| `AI_PROVIDER` | `openai` | AI provider or `disabled` |
+| `AI_MODEL` | `gpt-5.6-sol` | Configurable model name |
+| `AI_REASONING_EFFORT` | `xhigh` | Responses reasoning effort |
+| `OPENAI_API_KEY` | unset | Provider secret; AI is disabled without it |
+| `AI_BASE_URL` | unset | Optional compatible provider base URL |
+| `AI_TIMEOUT_SECONDS` | `90` | Provider timeout |
+
+## Verification
+
+```bash
 npm test
+npm run build
+npm audit --audit-level=high
 ```
 
-## Notes on Preserved Geometry
+The test suite covers geometry normalization, solver behavior, repository persistence, v2/v3 API contracts, artifact traversal protection, AI request configuration/tool boundaries, workspace readiness, sample presets, state updates, accessible chart selection, and metric formatting.
 
-- Preserved and fixed faces are selected from the uploaded mesh and passed as grouped `faceIndices`.
-- Fixed regions are modeled as preserved interfaces that are additionally referenced by load-case `fixedRegions`.
-- The solver locks preserved regions in voxel synthesis and exports preserved mesh triangles unmodified as a dedicated GLB node.
+## Solver boundary
 
-## Cloudflare Deploy (Web UI)
+The bundled engine produces useful geometry alternatives and deterministic comparison metrics, but its stress, displacement, compliance, and safety values are proxies. They must not be used for certification or release decisions. Before approving a part:
 
-This repo is a monorepo, so Wrangler must use the checked-in root config instead of workspace autodetection.
+1. export the candidate GLB;
+2. remesh it in a validated solver;
+3. reproduce supports, contacts, materials, and loads;
+4. run mesh-convergence and linear/nonlinear checks as appropriate;
+5. attach verified results through a real `SolverAdapter` implementation.
 
-- Config file: `wrangler.toml`
-- Deploy command: `npx wrangler deploy` (or `npm run deploy:cf`)
+See [docs/extension-guide.md](docs/extension-guide.md) and [docs/solver-assumptions.md](docs/solver-assumptions.md).
 
-For browser-only deployment on Cloudflare, set:
+## Static deployment
 
-- `VITE_SOLVER_MODE=browser`
-
-If Cloudflare is configured with a custom deploy command, keep it as:
+The checked-in `wrangler.toml` publishes the browser-mode SPA to Cloudflare assets:
 
 ```bash
-npx wrangler deploy
+npm run deploy:cf
 ```
 
-The config runs `npm run build:web` before deploy and publishes `apps/web/dist` as SPA assets.
+Use `VITE_SOLVER_MODE=browser` for static deployment. Hosting the durable API requires a Python-compatible service plus persistent database/artifact storage; Cloudflare static assets alone do not provide `/api/v3`.
