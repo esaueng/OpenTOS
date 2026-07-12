@@ -10,8 +10,11 @@
   "scripts": {
     "build": "npm run build:web",
     "dev:web": "npm --workspace @opentos/web run dev",
+    "dev:api": "cd apps/api && uvicorn app.main:app --reload --port 8000",
     "build:web": "npm --workspace @opentos/web run build",
     "test:web": "npm --workspace @opentos/web run test",
+    "test:api": "cd apps/api && python3 -m pytest",
+    "test": "npm run test:web && npm run test:api",
     "deploy:cf": "npx wrangler deploy",
     "sample:generate": "python3 scripts/generate_sample_part.py"
   }
