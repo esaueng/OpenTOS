@@ -117,7 +117,7 @@ function enforceThickness(
     return out;
   }
 
-  let shaped = occupancy.slice();
+  let shaped: Uint8Array = occupancy.slice();
   shaped = dilateMask(shaped, grid, minThickness);
   shaped = erodeMask(shaped, grid, minThickness);
 

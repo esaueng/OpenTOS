@@ -160,8 +160,8 @@ function rasterizeFacesToSurface(
 export function dilateMask(mask: Uint8Array, grid: VoxelGrid, iterations: number): Uint8Array {
   // Ping-pong between internal buffers only: the caller's mask must never be
   // written to, even when iterations >= 2.
-  let src = mask;
-  let dst = new Uint8Array(mask.length);
+  let src: Uint8Array = mask;
+  let dst: Uint8Array = new Uint8Array(mask.length);
 
   for (let it = 0; it < iterations; it += 1) {
     dst.fill(0);
@@ -189,8 +189,8 @@ export function dilateMask(mask: Uint8Array, grid: VoxelGrid, iterations: number
 }
 
 export function erodeMask(mask: Uint8Array, grid: VoxelGrid, iterations: number): Uint8Array {
-  let src = mask;
-  let dst = new Uint8Array(mask.length);
+  let src: Uint8Array = mask;
+  let dst: Uint8Array = new Uint8Array(mask.length);
 
   for (let it = 0; it < iterations; it += 1) {
     dst.fill(0);
@@ -461,4 +461,3 @@ export function forceSeedMask(
   }
   return mask;
 }
-

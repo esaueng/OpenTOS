@@ -102,8 +102,8 @@ function diffuseField(field: Float32Array, domainMask: Uint8Array, grid: VoxelGr
     [0, 0, -1]
   ];
 
-  let src = field;
-  let dst = new Float32Array(field.length);
+  let src: Float32Array = field;
+  let dst: Float32Array = new Float32Array(field.length);
 
   for (let it = 0; it < iterations; it += 1) {
     dst.fill(0);
