@@ -696,8 +696,14 @@ export function ViewerCanvas({
 
   return (
     <div className="viewer-shell">
-      <Canvas camera={{ fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }} shadows onPointerMissed={() => onSelectForce(null)}>
-        <color attach="background" args={["#081223"]} />
+      <Canvas
+        camera={{ fov: 42, near: 1e-6, far: 1e9, position: [1.2, 1.2, 1.2] }}
+        dpr={[1, 1.5]}
+        frameloop="demand"
+        shadows
+        onPointerMissed={() => onSelectForce(null)}
+      >
+        <color attach="background" args={["#20262d"]} />
         <ambientLight intensity={0.5} />
         <directionalLight position={[2, 3, 2]} intensity={1.1} castShadow />
         <group ref={fitRootRef} onClick={() => onSelectForce(null)}>
